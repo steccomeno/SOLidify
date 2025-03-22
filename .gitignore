@@ -15,3 +15,38 @@ target/
 #  and can be added to the global gitignore or merged into this file.  For a more nuclear
 #  option (not recommended) you can uncomment the following to ignore the entire idea folder.
 #.idea/
+
+# === Rust/Solana/Anchor ===
+# Ignore build artifacts
+target/
+**/target/
+*.so
+*.o
+*.rs.bk
+
+# Ignore Cargo and tooling metadata
+.cargo/
+.anchor/
+Cargo.lock  # Remove this line if your project requires it
+
+# Ignore wallet keypairs and secrets
+*.key
+*.json  # Remove this line if you track specific JSON files
+
+# === Node.js/React ===
+# Ignore dependencies and build outputs
+node_modules/
+build/
+dist/
+public/
+
+# Ignore lockfiles (optional)
+package-lock.json
+yarn.lock
+
+# Ignore environment variables
+.env
+.env.local
+
+# === macOS ===
+.DS_Store
