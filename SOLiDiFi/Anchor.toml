@@ -1,0 +1,16 @@
+[program]
+name = "your_program_name" # Replace with your program name
+id = "CXPpx9X241ULsKQhGbXscVQv6e4yRrcjAJWdQc82gGsV" # Replace with your program ID
+
+[build]
+program = "src/lib.rs" # Path to your program's source code
+
+[workspace]
+members = [
+    "src",
+    "tests",
+]
+
+[provider]
+cluster = "devnet" # Specify the cluster (devnet, testnet, mainnet)
+wallet = "~/.config/solana/id.json" # Path to your wallet keypair
