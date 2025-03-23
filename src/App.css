@@ -1,0 +1,411 @@
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@400;500;600;700&display=swap');
+
+/* Modern, Legion.cc-inspired UI - Dark mode with vibrant accents */
+:root {
+  --background-dark: #0f172a;
+  --background-card: #1e293b;
+  --primary-color: #3b82f6;
+  --primary-hover: #60a5fa;
+  --secondary-color: #8b5cf6;
+  --accent-color: #10b981;
+  --text-light: #f8fafc;
+  --text-dim: #94a3b8;
+  --border-color: #334155;
+  --shadow-color: rgba(0, 0, 0, 0.25);
+  --error-color: #ef4444;
+  --success-color: #10b981;
+  --warning-color: #f59e0b;
+  
+  /* Fonts */
+  --font-primary: 'Space Grotesk', sans-serif;
+  --font-secondary: 'Inter', sans-serif;
+  
+  /* Enhanced Colors */
+  --color-primary: #9D4EDD;
+  --color-primary-light: #C77DFF;
+  --color-primary-dark: #7B2CBF;
+  --color-secondary: #3A0CA3;
+  --color-accent: #4CC9F0;
+  --color-accent-hover: #7DD3F7;
+  --color-success: #02C39A;
+  --color-warning: #FFCA3A;
+  --color-danger: #FF5A5F;
+  
+  /* Transparent variants for overlays and backgrounds */
+  --color-primary-transparent: rgba(157, 78, 221, 0.15);
+  --color-accent-transparent: rgba(76, 201, 240, 0.15);
+  --color-success-transparent: rgba(2, 195, 154, 0.15);
+  --color-warning-transparent: rgba(255, 202, 58, 0.15);
+  --color-danger-transparent: rgba(255, 90, 95, 0.15);
+  
+  /* Backgrounds */
+  --bg-dark: #0B0C10;
+  --bg-dark-lighter: #1F2833;
+  --bg-card: #1A1B26;
+  --bg-card-hover: #262837;
+  --bg-input: #2E3047;
+  --bg-button: #3A0CA3;
+  --bg-button-hover: #4E16BF;
+  
+  /* Text */
+  --text-primary: #F8F9FA;
+  --text-secondary: #CED4DA;
+  --text-muted: #868E96;
+  --text-highlight: #4CC9F0;
+  --text-highlight-alt: #C77DFF;
+  --text-bright: #FFFFFF;
+  
+  /* Effects */
+  --glow-primary: 0 0 18px rgba(157, 78, 221, 0.4);
+  --glow-accent: 0 0 18px rgba(76, 201, 240, 0.4);
+  --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
+  --shadow-md: 0 4px 8px rgba(0, 0, 0, 0.3);
+  --shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.4);
+  
+  /* Borders */
+  --border-radius-sm: 6px;
+  --border-radius-md: 12px;
+  --border-radius-lg: 20px;
+  --border-radius-pill: 9999px;
+  
+  /* Transitions */
+  --transition-fast: 0.2s ease;
+  --transition-medium: 0.3s ease;
+  --transition-slow: 0.5s ease;
+  
+  /* Z-index layers */
+  --z-index-dropdown: 100;
+  --z-index-sticky: 200;
+  --z-index-fixed: 300;
+  --z-index-modal-backdrop: 400;
+  --z-index-modal: 500;
+  --z-index-tooltip: 600;
+
+  /* App.css - Legion.cc inspired dark theme */
+
+  /* Color Variables */
+  --bg-primary: #0a0a14;
+  --bg-secondary: #14141f;
+  --bg-tertiary: #1c1c2a;
+  --text-primary: #f7f7f7;
+  --text-secondary: #a0a0b8;
+  --text-accent: #6c7fff;
+  --accent-primary: #6c7fff;
+  --accent-secondary: #8557ff;
+  --border-color: #2a2a3a;
+  --button-primary: linear-gradient(90deg, #6c7fff, #8557ff);
+  --button-secondary: rgba(108, 127, 255, 0.1);
+  --button-hover: linear-gradient(90deg, #8557ff, #6c7fff);
+  --shadow-color: rgba(0, 0, 0, 0.3);
+  --card-bg: rgba(28, 28, 42, 0.6);
+  --success-color: #18cc6a;
+  --warning-color: #ffb323;
+  --error-color: #ff456b;
+
+  /* Typography */
+  --font-size-xs: 0.75rem;
+  --font-size-sm: 0.875rem;
+  --font-size-md: 1rem;
+  --font-size-lg: 1.25rem;
+  --font-size-xl: 1.5rem;
+  --font-size-xxl: 2.5rem;
+  
+  /* Layout */
+  --header-height: 70px;
+  --content-max-width: 1200px;
+  --border-radius-sm: 4px;
+  --border-radius-md: 8px;
+  --border-radius-lg: 16px;
+  --spacing-xs: 4px;
+  --spacing-sm: 8px;
+  --spacing-md: 16px;
+  --spacing-lg: 24px;
+  --spacing-xl: 32px;
+  --spacing-xxl: 64px;
+}
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+body {
+  overflow-y: auto;
+  background-color: var(--background-dark);
+  color: var(--text-light);
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  line-height: 1.6;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  width: 100%;
+  height: 100%;
+  top: 0;
+  left: 0;
+  background: 
+    radial-gradient(circle at 80% 10%, rgba(157, 78, 221, 0.15), transparent 50%),
+    radial-gradient(circle at 20% 90%, rgba(76, 201, 240, 0.12), transparent 50%), 
+    radial-gradient(circle at 50% 50%, rgba(58, 12, 163, 0.05), transparent 70%);
+  z-index: -1;
+  animation: backgroundShift 30s infinite alternate ease-in-out;
+}
+
+@keyframes backgroundShift {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: 100% 100%;
+  }
+}
+
+.app-container {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
+/* Modern header with glass effect */
+.header {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  backdrop-filter: blur(10px);
+  background-color: rgba(15, 23, 42, 0.8);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 1.5rem 2rem;
+}
+
+.logo {
+  display: flex;
+  align-items: center;
+  font-weight: 700;
+  font-size: 1.5rem;
+}
+
+.logo h1 {
+  font-size: 1.6rem;
+  font-weight: 700;
+  color: var(--primary-color);
+  margin: 0;
+  display: flex;
+  align-items: center;
+}
+
+.logo-text {
+  background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  margin-right: 0.5rem;
+}
+
+.logo-beta {
+  font-size: 0.7rem;
+  background-color: var(--secondary-color);
+  color: var(--text-light);
+  padding: 0.2rem 0.4rem;
+  border-radius: 4px;
+}
+
+.beta-badge {
+  font-size: 0.7rem;
+  background: var(--accent-color);
+  color: var(--text-dark);
+  padding: 0.15rem 0.35rem;
+  border-radius: 4px;
+  margin-left: 0.5rem;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.tabs {
+  margin-bottom: 0;
+  border-bottom: none;
+  display: flex;
+  gap: 1rem;
+}
+
+.tabs button {
+  background: transparent;
+  color: var(--text-light);
+  border: none;
+  font-size: 1rem;
+  padding: 0.5rem 1rem;
+  cursor: pointer;
+  position: relative;
+  transition: all 0.2s ease;
+}
+
+.tabs button.active {
+  color: var(--primary-color);
+}
+
+.tabs button.active::after {
+  content: '';
+  position: absolute;
+  bottom: -8px;
+  left: 0;
+  width: 100%;
+  height: 3px;
+  background: var(--primary-color);
+  border-radius: 3px 3px 0 0;
+}
+
+.tab:hover {
+  color: var(--text-light);
+}
+
+.content {
+  flex: 1;
+  padding: 2rem 2rem 4rem 2rem;
+  margin-top: 1rem;
+  overflow-y: auto;
+  max-width: 1200px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.footer {
+  text-align: center;
+  padding: 2rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  border-top: 1px solid var(--border-color);
+}
+
+/* Button styles */
+.button {
+  background-color: var(--primary-color);
+  color: white;
+  border: none;
+  padding: 0.75rem 1.5rem;
+  border-radius: 8px;
+  font-weight: 600;
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+}
+
+.button:hover {
+  background-color: var(--primary-hover);
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px var(--shadow-color);
+}
+
+.button.secondary {
+  background-color: transparent;
+  border: 1px solid var(--primary-color);
+  color: var(--primary-color);
+}
+
+.button.secondary:hover {
+  background-color: rgba(59, 130, 246, 0.1);
+}
+
+.button.connect-wallet {
+  background: linear-gradient(90deg, var(--primary-color), var(--secondary-color));
+}
+
+/* Card style */
+.card {
+  background-color: var(--background-card);
+  border-radius: 12px;
+  padding: 1.5rem;
+  box-shadow: 0 4px 15px var(--shadow-color);
+  border: 1px solid var(--border-color);
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+  .header {
+    flex-direction: column;
+    gap: 1rem;
+    padding: 1rem;
+  }
+  
+  .tabs {
+    width: 100%;
+    justify-content: center;
+  }
+  
+  .content {
+    padding: 1rem;
+  }
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: var(--bg-dark);
+}
+
+::-webkit-scrollbar-thumb {
+  background: var(--color-primary-dark);
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: var(--color-primary);
+}
+
+/* Make sure content starts below the navigation bar */
+.governance-interface, .sai-interface, .landing-page {
+  padding-top: 1rem;
+  margin-bottom: 4rem;
+}
+
+/* Fix wallet button styles */
+.connect-wallet-button {
+  background: var(--primary-color);
+  color: var(--text-dark);
+  border: none;
+  border-radius: 8px;
+  padding: 0.6rem 1.2rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  font-size: 0.9rem;
+}
+
+.connect-wallet-button:hover {
+  background: var(--primary-hover);
+  transform: translateY(-1px);
+}
+
+.disconnect-button {
+  background: transparent;
+  color: var(--text-light);
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  padding: 0.4rem 0.8rem;
+  font-size: 0.8rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.disconnect-button:hover {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+/* Main content padding */
+.sai-interface, .governance-interface {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding-top: 2rem;
+  padding-bottom: 6rem;
+}

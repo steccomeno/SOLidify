@@ -1,0 +1,33 @@
+[program]
+name = "your_program_name" # Replace with your program name
+id = "CXPpx9X241ULsKQhGbXscVQv6e4yRrcjAJWdQc82gGsV" # Replace with your program ID
+
+[build]
+program = "src/lib.rs" # Path to your program's source code
+
+[workspace]
+members = [
+    "src",
+    "tests",
+]
+
+[provider]
+cluster = "devnet" # Specify the cluster (devnet, testnet, mainnet)
+wallet = "./keys/deployer.json" # Path to your wallet keypair
+
+[features]
+seeds = false
+skip-lint = false
+
+[programs.devnet]
+sai = "SAi111111111111111111111111111111111111111"
+sld = "SLDGkQDvmaXaDYpXTAXxxSQkgRdotTwNNWuZ9AHgK9w"
+
+[registry]
+url = "https://api.apr.dev"
+
+[scripts]
+test = "yarn run ts-mocha -p ./tsconfig.json -t 1000000 tests/**/*.ts"
+initialize = "node src/scripts/initialize.js"
+create_cdp = "node src/scripts/create_cdp.js"
+create_proposal = "node src/scripts/create_proposal.js"

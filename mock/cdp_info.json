@@ -1,0 +1,8 @@
+{
+  "cdpAddress": "CDPacct111111111111111111111111111111111111",
+  "owner": "9o2xcedhF5QvRdiin6dVkaLi5ahCTf5ghoc5CmzY25CR",
+  "collateralAmount": 10000000000,
+  "saiDebt": 7500000,
+  "lastAccrueTime": 1742758086.783,
+  "liquidationPrice": 0.8999999999999999
+}

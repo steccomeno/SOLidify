@@ -1,0 +1,25 @@
+[package]
+name = "your_program_name" # Replace with your program name
+version = "0.1.0"
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anchor-lang = "0.26.0" # Ensure this matches your Anchor version
+
+[workspace]
+members = [
+    "programs/sai",
+    "programs/sld"
+]
+
+[profile.release]
+overflow-checks = true
+lto = "fat"
+codegen-units = 1
+[profile.release.build-override]
+opt-level = 3
+incremental = false
+codegen-units = 1

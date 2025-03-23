@@ -1,0 +1,11 @@
+{
+  "proposalAddress": "PROPacct11111111111111111111111111111111111",
+  "proposer": "9o2xcedhF5QvRdiin6dVkaLi5ahCTf5ghoc5CmzY25CR",
+  "title": "Increase Minimum Vote Threshold",
+  "description": "Proposal to increase the minimum vote threshold for governance proposals to ensure greater participation.",
+  "voteStart": 1742758086.783,
+  "voteEnd": 1743362886.783,
+  "yesVotes": 750000000000,
+  "noVotes": 250000000000,
+  "status": "active"
+}

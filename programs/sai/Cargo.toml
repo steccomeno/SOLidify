@@ -1,0 +1,21 @@
+[package]
+name = "sai"
+version = "0.1.0"
+description = "SAI stablecoin program for SOLidify protocol"
+edition = "2021"
+
+[lib]
+crate-type = ["cdylib", "lib"]
+name = "sai"
+
+[features]
+no-entrypoint = []
+no-idl = []
+no-log-ix-name = []
+cpi = ["no-entrypoint"]
+default = []
+
+[dependencies]
+anchor-lang = "0.26.0"
+anchor-spl = "0.26.0"
+solana-program = "1.15.2" 

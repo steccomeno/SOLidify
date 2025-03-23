@@ -1,0 +1,458 @@
+{
+  "version": "0.1.0",
+  "name": "sld",
+  "instructions": [
+    {
+      "name": "initializeGovernance",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "governance",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "sldMint",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "mintAuthority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "rent",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "minVoteThreshold",
+          "type": "u64"
+        },
+        {
+          "name": "votingPeriod",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "createProposal",
+      "accounts": [
+        {
+          "name": "proposer",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "proposal",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "governance",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "clock",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "title",
+          "type": "string"
+        },
+        {
+          "name": "description",
+          "type": "string"
+        },
+        {
+          "name": "votingPeriod",
+          "type": "i64"
+        }
+      ]
+    },
+    {
+      "name": "castVote",
+      "accounts": [
+        {
+          "name": "voter",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "voterSld",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "proposal",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "voteRecord",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "governance",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "governanceSld",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "sldMint",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "systemProgram",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "clock",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "voteAmount",
+          "type": "u64"
+        },
+        {
+          "name": "support",
+          "type": "bool"
+        }
+      ]
+    },
+    {
+      "name": "executeProposal",
+      "accounts": [
+        {
+          "name": "executor",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "proposal",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "governance",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "clock",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
+    },
+    {
+      "name": "mintSld",
+      "accounts": [
+        {
+          "name": "admin",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "governance",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "sldMint",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "adminSld",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "mintAuthority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": [
+        {
+          "name": "amount",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "accounts": [
+    {
+      "name": "Governance",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "admin",
+            "type": "publicKey"
+          },
+          {
+            "name": "sldMint",
+            "type": "publicKey"
+          },
+          {
+            "name": "minVoteThreshold",
+            "type": "u64"
+          },
+          {
+            "name": "votingPeriod",
+            "type": "i64"
+          },
+          {
+            "name": "proposalCount",
+            "type": "u64"
+          }
+        ]
+      }
+    },
+    {
+      "name": "Proposal",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "proposer",
+            "type": "publicKey"
+          },
+          {
+            "name": "title",
+            "type": "string"
+          },
+          {
+            "name": "description",
+            "type": "string"
+          },
+          {
+            "name": "createdAt",
+            "type": "i64"
+          },
+          {
+            "name": "votingPeriod",
+            "type": "i64"
+          },
+          {
+            "name": "forVotes",
+            "type": "u64"
+          },
+          {
+            "name": "againstVotes",
+            "type": "u64"
+          },
+          {
+            "name": "executed",
+            "type": "bool"
+          }
+        ]
+      }
+    },
+    {
+      "name": "VoteRecord",
+      "type": {
+        "kind": "struct",
+        "fields": [
+          {
+            "name": "voter",
+            "type": "publicKey"
+          },
+          {
+            "name": "proposal",
+            "type": "publicKey"
+          },
+          {
+            "name": "voteAmount",
+            "type": "u64"
+          },
+          {
+            "name": "support",
+            "type": "bool"
+          }
+        ]
+      }
+    }
+  ],
+  "events": [
+    {
+      "name": "ProposalCreatedEvent",
+      "fields": [
+        {
+          "name": "proposalId",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "proposer",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "title",
+          "type": "string",
+          "index": false
+        },
+        {
+          "name": "votingEndsAt",
+          "type": "i64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "VoteCastEvent",
+      "fields": [
+        {
+          "name": "proposalId",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "voter",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "votedFor",
+          "type": "bool",
+          "index": false
+        },
+        {
+          "name": "votingPower",
+          "type": "u64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "ProposalExecutedEvent",
+      "fields": [
+        {
+          "name": "proposalId",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "executor",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "votesFor",
+          "type": "u64",
+          "index": false
+        },
+        {
+          "name": "votesAgainst",
+          "type": "u64",
+          "index": false
+        }
+      ]
+    },
+    {
+      "name": "SldMintedEvent",
+      "fields": [
+        {
+          "name": "recipient",
+          "type": "publicKey",
+          "index": false
+        },
+        {
+          "name": "amount",
+          "type": "u64",
+          "index": false
+        }
+      ]
+    }
+  ],
+  "errors": [
+    {
+      "code": 6000,
+      "name": "NotAuthorized",
+      "msg": "Not authorized to perform this action"
+    },
+    {
+      "code": 6001,
+      "name": "MathOverflow",
+      "msg": "Math operation overflow"
+    },
+    {
+      "code": 6002,
+      "name": "VotingClosed",
+      "msg": "Voting period has closed"
+    },
+    {
+      "code": 6003,
+      "name": "VotingStillOpen",
+      "msg": "Voting period is still open"
+    },
+    {
+      "code": 6004,
+      "name": "ProposalAlreadyExecuted",
+      "msg": "Proposal has already been executed"
+    },
+    {
+      "code": 6005,
+      "name": "InsufficientVotes",
+      "msg": "Proposal does not have enough votes to execute"
+    },
+    {
+      "code": 6006,
+      "name": "ProposalRejected",
+      "msg": "Proposal was rejected (more against votes than for votes)"
+    }
+  ],
+  "metadata": {
+    "address": "SLDGkQDvmaXaDYpXTAXxxSQkgRdotTwNNWuZ9AHgK9w"
+  }
+} 
