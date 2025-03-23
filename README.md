@@ -25,7 +25,7 @@ SOLidify is a decentralized finance (DeFi) application built on the Solana block
 1. Clone the repository:
 
 ```bash
-git clone https://github.com/yourusername/SOLidify.git
+git clone https://github.com/steccomeno/SOLidify.git
 cd SOLidify/solana-makerdao-clone
 ```
 
