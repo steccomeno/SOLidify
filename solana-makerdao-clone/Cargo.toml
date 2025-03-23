@@ -1,0 +1,10 @@
+[package]
+name = "your_program_name" # Replace with your program name
+version = "0.1.0"
+edition = "2018"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+anchor-lang = "0.26.0" # Ensure this matches your Anchor version
