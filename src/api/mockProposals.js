@@ -1,0 +1,137 @@
+// Mock proposals data for SOLidify governance interface
+export const mockProposals = [
+  {
+    id: 'prop-001',
+    title: 'Adjust Collateralization Ratio',
+    description: 'Increase minimum collateralization ratio from 150% to 160% to enhance system safety.',
+    status: 'passed',
+    forVotes: 850000,
+    againstVotes: 250000,
+    startDate: '2023-04-10',
+    endDate: '2023-04-17',
+    quorum: 750000,
+    executor: 'Protocol DAO',
+    fullDescription: `## Motivation\nThe current minimum collateralization ratio of 150% is relatively low compared to industry standards, especially during times of high market volatility.\n\n## Specification\nThis proposal will modify the smart contract parameter that controls the minimum collateralization ratio, changing it from 150% to 160%.\n\n## Risk Assessment\nIncreasing the collateralization ratio will make the system more secure, but may reduce capital efficiency for users who prefer to be highly leveraged.`,
+    implementation: 'Implemented on April 20, 2023. All existing CDPs below 160% were given a 7-day grace period to increase their collateral.'
+  },
+  {
+    id: 'prop-002',
+    title: 'Add USDC as Collateral Type',
+    description: 'Allow USDC to be used as collateral for minting SAI stablecoins.',
+    status: 'active',
+    forVotes: 425000,
+    againstVotes: 175000,
+    startDate: '2023-09-01',
+    endDate: '2023-09-08',
+    quorum: 500000,
+    executor: 'Technical Committee',
+    fullDescription: `## Motivation\nAdding USDC as a collateral type will diversify the risk profile of the system and provide users with more options.\n\n## Specification\nThis proposal will add USDC as a collateral type with the following parameters:\n- Collateralization ratio: 120%\n- Debt ceiling: 5,000,000 SAI\n- Stability fee: 1.0%\n\n## Risk Assessment\nUSDC is a centralized stablecoin which introduces counterparty risk, but its price stability makes it an ideal collateral type with a lower collateralization ratio.`
+  },
+  {
+    id: 'prop-003',
+    title: 'Reduce Stability Fee',
+    description: 'Lower the stability fee from 2.5% to 1.5% to make borrowing more attractive.',
+    status: 'active',
+    forVotes: 580000,
+    againstVotes: 320000,
+    startDate: '2023-08-25',
+    endDate: '2023-09-05',
+    quorum: 500000,
+    executor: 'Protocol DAO',
+    fullDescription: `## Motivation\nThe current stability fee of 2.5% is higher than competitors, which may be reducing adoption of SAI. Lowering the fee will make our protocol more competitive.\n\n## Specification\nThis proposal will reduce the annual stability fee from 2.5% to 1.5% for all existing and new CDPs.\n\n## Risk Assessment\nLowering the fee may reduce protocol revenue, but the increased volume of CDPs and SAI in circulation should offset this reduction.`
+  },
+  {
+    id: 'prop-004',
+    title: 'Implement Staking Rewards',
+    description: 'Distribute protocol fees to SLD token holders who stake their tokens.',
+    status: 'pending',
+    forVotes: 0,
+    againstVotes: 0,
+    startDate: '2023-09-15',
+    endDate: '2023-09-22',
+    quorum: 500000,
+    executor: 'Technical Committee',
+    fullDescription: `## Motivation\nTo increase governance participation and provide more value to SLD token holders, we propose implementing a staking mechanism that rewards active governance participants.\n\n## Specification\nThis proposal will:\n- Create a staking contract for SLD tokens\n- Allocate 70% of protocol fees to stakers\n- Require a 14-day lockup period for staked tokens\n- Weight governance votes by staking duration\n\n## Risk Assessment\nImplementing a staking mechanism increases the complexity of the protocol but should improve governance participation and align incentives.`
+  },
+  {
+    id: 'prop-005',
+    title: 'Expand Liquidation System',
+    description: 'Allow community members to participate as liquidators by staking SLD tokens.',
+    status: 'defeated',
+    forVotes: 320000,
+    againstVotes: 680000,
+    startDate: '2023-07-01',
+    endDate: '2023-07-08',
+    quorum: 500000,
+    executor: 'Technical Committee',
+    fullDescription: `## Motivation\nThe current liquidation system relies on a small number of whitelisted liquidators, which may not be efficient enough during high volatility.\n\n## Specification\nThis proposal would:\n- Allow any SLD holder to stake at least 1000 SLD to become a liquidator\n- Implement a Dutch auction mechanism for liquidations\n- Share liquidation penalties proportionally among participating liquidators\n\n## Risk Assessment\nThis change could make liquidations more efficient but might introduce new attack vectors if not implemented carefully.`
+  },
+  {
+    id: 'prop-006',
+    title: 'Create Emergency Fund',
+    description: 'Allocate 10% of protocol fees to an emergency fund for covering system shortfalls.',
+    status: 'passed',
+    forVotes: 950000,
+    againstVotes: 50000,
+    startDate: '2023-06-10',
+    endDate: '2023-06-17',
+    quorum: 500000,
+    executor: 'Protocol DAO',
+    fullDescription: `## Motivation\nTo protect the protocol during black swan events, we should establish an emergency fund that can be used to cover system shortfalls.\n\n## Specification\nThis proposal will:\n- Allocate 10% of all stability fees to a multi-sig controlled emergency fund\n- Establish a governance process for using these funds\n- Set a target of 1,000,000 SAI for the fund\n\n## Risk Assessment\nThis improves system resilience at the cost of reducing immediate returns to token holders.`,
+    implementation: 'Implemented on June 20, 2023. The emergency fund has accumulated 250,000 SAI as of September 1, 2023.'
+  },
+  {
+    id: 'prop-007',
+    title: 'Integrate with Solana DeFi Protocols',
+    description: 'Partner with major Solana DeFi protocols to improve SAI adoption and liquidity.',
+    status: 'active',
+    forVotes: 620000,
+    againstVotes: 180000,
+    startDate: '2023-08-15',
+    endDate: '2023-09-15',
+    quorum: 500000,
+    executor: 'Protocol DAO',
+    fullDescription: `## Motivation\nIntegrating SAI with other DeFi protocols on Solana will increase its utility and adoption.\n\n## Specification\nThis proposal will fund efforts to:\n- Create deep liquidity pools on major DEXs\n- Develop yield farming strategies for SAI\n- Build integration partnerships with lending and yield aggregator protocols\n\n## Risk Assessment\nThese integrations expose SAI to smart contract risks from other protocols, but the benefits of increased adoption outweigh these risks.`
+  },
+  {
+    id: 'prop-008',
+    title: 'Upgrade Oracle System',
+    description: 'Implement a more robust oracle system using multiple price feeds.',
+    status: 'active',
+    forVotes: 420000,
+    againstVotes: 280000,
+    startDate: '2023-08-20',
+    endDate: '2023-09-10',
+    quorum: 500000,
+    executor: 'Technical Committee',
+    fullDescription: `## Motivation\nThe current price oracle system relies on a single provider, creating a single point of failure.\n\n## Specification\nThis proposal will upgrade the oracle system to:\n- Use price feeds from 3 different providers\n- Implement a median price selection algorithm\n- Add circuit breakers for extreme price movements\n\n## Risk Assessment\nThis increases implementation complexity but significantly reduces oracle manipulation risks.`
+  },
+  {
+    id: 'prop-009',
+    title: 'Adjust Revenue Distribution',
+    description: 'Change the revenue distribution model to allocate more funds to protocol development.',
+    status: 'defeated',
+    forVotes: 300000,
+    againstVotes: 700000,
+    startDate: '2023-07-15',
+    endDate: '2023-07-22',
+    quorum: 500000,
+    executor: 'Protocol DAO',
+    fullDescription: `## Motivation\nTo ensure sustainable long-term development, more resources should be allocated to core development efforts.\n\n## Specification\nThis proposal would change the revenue distribution as follows:\n- 40% to stakers (down from 70%)\n- 40% to development fund (up from 20%)\n- 10% to emergency fund (unchanged)\n- 10% to marketing and growth (up from 0%)\n\n## Risk Assessment\nThis change would reduce immediate returns to stakers but could lead to greater long-term value through improved protocol development.`
+  },
+  {
+    id: 'prop-010',
+    title: 'Increase SAI Debt Ceiling',
+    description: 'Raise the global SAI debt ceiling from 10 million to 20 million.',
+    status: 'pending',
+    forVotes: 0,
+    againstVotes: 0,
+    startDate: '2023-09-20',
+    endDate: '2023-09-27',
+    quorum: 750000,
+    executor: 'Protocol DAO',
+    fullDescription: `## Motivation\nThe current debt ceiling of 10 million SAI is close to being reached, limiting growth. Increasing it will allow for continued expansion.\n\n## Specification\nThis proposal will double the global debt ceiling from 10 million to 20 million SAI.\n\n## Risk Assessment\nIncreasing the debt ceiling expands the system's risk exposure but is necessary for growth. The protocol's risk parameters and emergency fund provide adequate safeguards.`
+  }
+];
+
+export default mockProposals; 

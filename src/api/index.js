@@ -1,4 +1,5 @@
 // Mock API for SOLidify demo
+import { mockProposals } from './mockProposals';
 
 // Simulate network delay
 const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
@@ -143,121 +144,16 @@ export const closeCDP = async (cdpId) => {
 // Mock governance functions
 export const getProposals = async () => {
   await delay(1000);
-  return [
-    {
-      id: 'prop-001',
-      title: 'Adjust collateralization ratio',
-      description: 'Proposal to adjust the minimum collateralization ratio from 150% to 160%',
-      status: 'active',
-      forVotes: 1250000,
-      againstVotes: 750000,
-      startDate: '2023-06-01',
-      endDate: '2023-06-08',
-    },
-    {
-      id: 'prop-002',
-      title: 'Add USDC as collateral',
-      description: 'Proposal to add USDC as a supported collateral type for CDPs',
-      status: 'passed',
-      forVotes: 1800000,
-      againstVotes: 200000,
-      startDate: '2023-05-15',
-      endDate: '2023-05-22',
-    },
-    {
-      id: 'prop-003',
-      title: 'Reduce stability fee',
-      description: 'Proposal to reduce the stability fee from 2.5% to 1.5%',
-      status: 'active',
-      forVotes: 900000,
-      againstVotes: 850000,
-      startDate: '2023-06-05',
-      endDate: '2023-06-12',
-    },
-  ];
+  return mockProposals;
 };
 
 export const getProposalDetails = async (proposalId) => {
   await delay(800);
-  
-  if (proposalId === 'prop-001') {
-    return {
-      id: proposalId,
-      title: 'Adjust collateralization ratio',
-      description: 'Proposal to adjust the minimum collateralization ratio from 150% to 160%',
-      fullDescription: `
-## Motivation
-The current minimum collateralization ratio of 150% leaves the protocol with a smaller safety margin during market volatility than desired. Increasing the ratio to 160% will enhance the protocol's safety without significantly impacting usability.
-
-## Specification
-- Change the minimum collateralization ratio from 150% to 160%
-- Apply the new ratio to new CDPs only
-- Existing CDPs will be grandfathered in at 150% but will need to meet the 160% requirement when making any modifications
-
-## Risk Assessment
-A higher collateralization ratio reduces liquidation risk during market volatility, but may reduce capital efficiency for users.
-      `,
-      status: 'active',
-      forVotes: 1250000,
-      againstVotes: 750000,
-      startDate: '2023-06-01',
-      endDate: '2023-06-08',
-      quorum: 1000000,
-      executor: 'Governance Council',
-    };
+  const proposal = mockProposals.find(p => p.id === proposalId);
+  if (!proposal) {
+    throw new Error('Proposal not found');
   }
-  
-  if (proposalId === 'prop-002') {
-    return {
-      id: proposalId,
-      title: 'Add USDC as collateral',
-      description: 'Proposal to add USDC as a supported collateral type for CDPs',
-      fullDescription: `
-## Motivation
-Currently, the protocol only supports SOL as collateral. Adding USDC as a collateral option will diversify the protocol's risk profile and provide users with more flexibility.
-
-## Specification
-- Add USDC as a supported collateral type
-- Set the minimum collateralization ratio for USDC at 120%
-- Set the debt ceiling for USDC-backed SAI at 10 million
-
-## Risk Assessment
-USDC is a stablecoin with less price volatility than SOL, allowing for a lower collateralization ratio. However, USDC carries counterparty risk from Circle, its issuer.
-      `,
-      status: 'passed',
-      forVotes: 1800000,
-      againstVotes: 200000,
-      startDate: '2023-05-15',
-      endDate: '2023-05-22',
-      quorum: 1000000,
-      executor: 'Governance Council',
-      implementation: 'Scheduled for June 15, 2023',
-    };
-  }
-  
-  return {
-    id: proposalId,
-    title: 'Reduce stability fee',
-    description: 'Proposal to reduce the stability fee from 2.5% to 1.5%',
-    fullDescription: `
-## Motivation
-The current stability fee of 2.5% is higher than necessary to maintain the peg and attract users to the platform. Reducing it to 1.5% will make the protocol more competitive while still ensuring stability.
-
-## Specification
-- Reduce the stability fee from 2.5% to 1.5% for all collateral types
-- Apply the change immediately upon proposal execution
-
-## Risk Assessment
-A lower stability fee may lead to higher SAI issuance, putting more pressure on the peg. However, the current level of overcollateralization should mitigate this risk.
-    `,
-    status: 'active',
-    forVotes: 900000,
-    againstVotes: 850000,
-    startDate: '2023-06-05',
-    endDate: '2023-06-12',
-    quorum: 1000000,
-    executor: 'Governance Council',
-  };
+  return proposal;
 };
 
 export const castVote = async (proposalId, vote) => {
