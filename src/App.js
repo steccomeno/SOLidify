@@ -3,24 +3,29 @@ import './App.css';
 import LandingPage from './components/LandingPage';
 import SaiInterface from './components/SaiInterface';
 import GovernanceInterface from './components/GovernanceInterface';
+import LiquidationAuctionInterface from './components/LiquidationAuctionInterface';
+import LiquidationDashboard from './pages/LiquidationDashboard';
+import LaunchScreen from './components/LaunchScreen';
 // Import wallet icons
 import phantomIcon from './assets/phantom-icon.svg';
+import { BrowserRouter as Router, Routes, Route, Link, useNavigate } from 'react-router-dom';
+import { connectWallet, disconnectWallet, isWalletConnected, getWalletAddress } from './utils/walletUtils';
 
 function App() {
   const [activeTab, setActiveTab] = useState('home'); // 'home', 'sai', or 'governance'
   const [walletConnected, setWalletConnected] = useState(false);
   const [walletAddress, setWalletAddress] = useState('');
   const [isConnecting, setIsConnecting] = useState(false);
+  const [showLaunchScreen, setShowLaunchScreen] = useState(true);
 
   useEffect(() => {
     // Check if wallet is already connected
     const checkWalletConnection = async () => {
       try {
-        // Mock wallet check for now
-        const connected = localStorage.getItem('walletConnected') === 'true';
+        const connected = isWalletConnected();
         if (connected) {
           setWalletConnected(true);
-          setWalletAddress(localStorage.getItem('walletAddress') || '');
+          setWalletAddress(getWalletAddress() || '');
         }
       } catch (error) {
         console.error("Error checking wallet connection:", error);
@@ -28,6 +33,12 @@ function App() {
     };
 
     checkWalletConnection();
+
+    // Check if we've already launched the app before (using localStorage)
+    const hasLaunched = localStorage.getItem('solidify_launched');
+    if (hasLaunched === 'true') {
+      setShowLaunchScreen(false);
+    }
   }, []);
 
   // Function to handle navigation from landing page to app sections
@@ -36,34 +47,33 @@ function App() {
     window.scrollTo(0, 0);
   };
 
-  // Mock wallet connection
-  const connectWallet = async () => {
+  // Handle wallet connection
+  const handleConnectWallet = async () => {
+    if (walletConnected) {
+      // Disconnect wallet
+      disconnectWallet();
+      setWalletConnected(false);
+      setWalletAddress('');
+      return;
+    }
+    
     setIsConnecting(true);
     
     try {
-      // Simulate connection delay
-      await new Promise(resolve => setTimeout(resolve, 800));
+      // Connect wallet
+      const result = await connectWallet();
       
-      // Mock successful connection
-      const mockAddress = '9o2xcedhF5QvRdiin6dVkaLi5ahCTf5ghoc5CmzY25CR';
-      setWalletConnected(true);
-      setWalletAddress(mockAddress);
-      
-      // Save to localStorage for persistence
-      localStorage.setItem('walletConnected', 'true');
-      localStorage.setItem('walletAddress', mockAddress);
+      if (result.success) {
+        setWalletConnected(true);
+        setWalletAddress(result.address);
+      } else {
+        console.error("Failed to connect wallet:", result.message);
+      }
     } catch (error) {
       console.error("Failed to connect wallet:", error);
     } finally {
       setIsConnecting(false);
     }
-  };
-
-  const disconnectWallet = () => {
-    setWalletConnected(false);
-    setWalletAddress('');
-    localStorage.removeItem('walletConnected');
-    localStorage.removeItem('walletAddress');
   };
 
   // Format wallet address for display
@@ -72,80 +82,94 @@ function App() {
     return `${address.slice(0, 4)}...${address.slice(-4)}`;
   };
 
-  return (
-    <div className="app-container">
-      <header className="header">
-        <div className="logo">
-          <h1>SOLiDiFi <span className="beta-badge">Beta</span></h1>
-        </div>
-        
-        <nav className="tabs">
-          <button 
-            className={`tab ${activeTab === 'home' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('home')}
-          >
-            Home
-          </button>
-          <button 
-            className={`tab ${activeTab === 'sai' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('sai')}
-          >
-            SAI
-          </button>
-          <button 
-            className={`tab ${activeTab === 'governance' ? 'active' : ''}`} 
-            onClick={() => setActiveTab('governance')}
-          >
-            Governance
-          </button>
-        </nav>
-        
-        <div className="wallet-section">
-          {walletConnected ? (
-            <div className="wallet-info">
-              <span className="wallet-address">{formatWalletAddress(walletAddress)}</span>
-              <button className="disconnect-button" onClick={disconnectWallet}>
-                Disconnect
-              </button>
-            </div>
-          ) : (
-            <button 
-              className="connect-wallet-button" 
-              onClick={connectWallet}
-              disabled={isConnecting}
-            >
-              {isConnecting ? 'Connecting...' : 'Connect Wallet'}
-            </button>
-          )}
-        </div>
-      </header>
+  const handleLaunch = () => {
+    setShowLaunchScreen(false);
+    // Store in localStorage that we've launched the app
+    localStorage.setItem('solidify_launched', 'true');
+    // Ensure we start at the home route
+    window.history.pushState({}, '', '/');
+  };
 
-      <main className="content">
-        {activeTab === 'home' && (
-          <LandingPage navigateToApp={navigateToApp} />
+  // If someone wants to directly access a page, override the launch screen
+  useEffect(() => {
+    if (window.location.pathname !== '/' && showLaunchScreen) {
+      setShowLaunchScreen(false);
+      localStorage.setItem('solidify_launched', 'true');
+    }
+  }, [showLaunchScreen]);
+
+  return (
+    <Router>
+      <div className="app">
+        {showLaunchScreen ? (
+          <LaunchScreen onLaunch={handleLaunch} />
+        ) : (
+          <>
+            <header className="app-header">
+              <div className="logo">
+                <Link to="/">SOLidify</Link>
+              </div>
+              <nav className="main-nav">
+                <ul>
+                  <li>
+                    <Link to="/">Home</Link>
+                  </li>
+                  <li>
+                    <Link to="/vaults">Vaults</Link>
+                  </li>
+                  <li>
+                    <Link to="/liquidations">Liquidations</Link>
+                  </li>
+                  <li>
+                    <Link to="/governance">Governance</Link>
+                  </li>
+                </ul>
+              </nav>
+              <button 
+                className={`wallet-button ${walletConnected ? 'connected' : ''} ${isConnecting ? 'connecting' : ''}`}
+                onClick={handleConnectWallet}
+                disabled={isConnecting}
+              >
+                {isConnecting ? (
+                  'Connecting...'
+                ) : walletConnected ? (
+                  <>
+                    <span className="wallet-address">{formatWalletAddress(walletAddress)}</span>
+                    <span className="wallet-status"></span>
+                  </>
+                ) : (
+                  'Connect Wallet'
+                )}
+              </button>
+            </header>
+            
+            <main className="app-content">
+              <Routes>
+                <Route path="/" element={<LandingPage onGetStarted={() => navigateToApp('sai')} />} />
+                <Route path="/vaults" element={<SaiInterface walletConnected={walletConnected} walletAddress={walletAddress} />} />
+                <Route path="/liquidations" element={<LiquidationDashboard walletConnected={walletConnected} walletAddress={walletAddress} />} />
+                <Route path="/governance" element={<GovernanceInterface walletConnected={walletConnected} walletAddress={walletAddress} />} />
+              </Routes>
+            </main>
+            
+            <footer className="app-footer">
+              <div className="footer-content">
+                <div className="footer-logo">SOLidify</div>
+                <div className="footer-links">
+                  <a href="https://github.com/solidify-dao" target="_blank" rel="noopener noreferrer">GitHub</a>
+                  <a href="#" target="_blank" rel="noopener noreferrer">Docs</a>
+                  <a href="#" target="_blank" rel="noopener noreferrer">Terms</a>
+                  <a href="#" target="_blank" rel="noopener noreferrer">Privacy</a>
+                </div>
+              </div>
+              <div className="copyright">
+                © {new Date().getFullYear()} SOLidify. All rights reserved.
+              </div>
+            </footer>
+          </>
         )}
-        
-        {activeTab === 'sai' && (
-          <SaiInterface walletConnected={walletConnected} connectWallet={connectWallet} />
-        )}
-        
-        {activeTab === 'governance' && (
-          <GovernanceInterface walletConnected={walletConnected} connectWallet={connectWallet} />
-        )}
-      </main>
-      
-      <footer className="footer">
-        <div className="footer-content">
-          <p>© {new Date().getFullYear()} SOLiDiFi. All rights reserved.</p>
-          <div className="footer-links">
-            <a href="#" target="_blank" rel="noopener noreferrer">Twitter</a>
-            <a href="#" target="_blank" rel="noopener noreferrer">Discord</a>
-            <a href="#" target="_blank" rel="noopener noreferrer">GitHub</a>
-            <a href="#" target="_blank" rel="noopener noreferrer">Docs</a>
-          </div>
-        </div>
-      </footer>
-    </div>
+      </div>
+    </Router>
   );
 }
 

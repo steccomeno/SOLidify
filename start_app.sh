@@ -30,14 +30,23 @@ fi
 echo "Stopping any existing React processes..."
 lsof -ti:3000 | xargs kill -9 2>/dev/null || true
 
-# Set environment variable to use mock data
-echo "REACT_APP_USE_MOCK=true" > .env.local
-echo "Environment set to use mock data"
+# Set environment variables
+cat > .env.local << EOF
+REACT_APP_USE_MOCK=true
+REACT_APP_SOLANA_NETWORK=devnet
+REACT_APP_PORT=3000
+REACT_APP_HOST=localhost
+EOF
+
+echo "Environment set to use mock data on Solana devnet"
 
 # Start the app
 echo "Starting the app with mock data..."
+echo "Access the app at http://localhost:3000"
 echo "If you want to use real Solana network, edit .env.local and set REACT_APP_USE_MOCK=false"
-npm start
+
+# Explicitly set the host and port
+HOST=localhost PORT=3000 npm start
 
 # Exit with the exit code of the last command
 exit $? 
