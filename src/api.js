@@ -3,10 +3,19 @@ import { Program, AnchorProvider, BN, web3 } from '@project-serum/anchor';
 import { TOKEN_PROGRAM_ID, ASSOCIATED_TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction } from '@solana/spl-token';
 import saiIdl from './idl/sai.json';
 import sldIdl from './idl/sld.json';
+import {
+  getPythPrice,
+  checkLiquidationRisk,
+  getActiveLiquidations,
+  getLiquidationHistory,
+  placeLiquidationBid,
+  checkAndLiquidateVaults,
+  mockPrices
+} from './api/mockLiquidation';
 
 // Connection setup
 const getProvider = () => {
-    const connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
+const connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
     const provider = new AnchorProvider(
         connection, 
         window.solana, 
@@ -535,4 +544,87 @@ export const connectWallet = async () => {
         console.error('Error connecting to wallet:', error);
         return false;
     }
+};
+
+// Add these exports near the end of the file, before the last export
+export const getOraclePrice = async (assetSymbol) => {
+  try {
+    return await getPythPrice(assetSymbol);
+  } catch (error) {
+    console.error('Error getting oracle price:', error);
+    throw error;
+  }
+};
+
+export const checkVaultLiquidationRisk = async (cdpAddress) => {
+  try {
+    // Get the CDP details
+    const cdp = await getCDPInfo(cdpAddress);
+    
+    // Determine collateral type (simplified for mock)
+    const collateralType = cdp.collateralMint.toString() === SAI_MINT.toString() ? 'SOL' : 'USDC';
+    
+    // Format the data for the liquidation risk check
+    const cdpData = {
+      id: cdpAddress,
+      collateralAmount: cdp.collateralAmount,
+      debtAmount: cdp.debtAmount,
+      collateralType,
+    };
+    
+    return await checkLiquidationRisk(cdpData);
+  } catch (error) {
+    console.error('Error checking vault liquidation risk:', error);
+    throw error;
+  }
+};
+
+export const getCollateralPrice = async (collateralType) => {
+  try {
+    const price = await getOraclePrice(collateralType);
+    return price.price;
+  } catch (error) {
+    console.error(`Error getting ${collateralType} price:`, error);
+    // Fallback to static price if oracle call fails
+    return mockPrices[collateralType] || 0;
+  }
+};
+
+export const getAllActiveLiquidations = async () => {
+  try {
+    return await getActiveLiquidations();
+  } catch (error) {
+    console.error('Error getting active liquidations:', error);
+    throw error;
+  }
+};
+
+export const getLiquidationHistoryForUser = async (limit = 10) => {
+  try {
+    const liquidations = await getLiquidationHistory(limit);
+    // In a real implementation, we would filter by the user's public key
+    // For demo purposes, just return all liquidations
+    return liquidations;
+  } catch (error) {
+    console.error('Error getting liquidation history:', error);
+    throw error;
+  }
+};
+
+export const bidOnLiquidationAuction = async (auctionId, bidAmount) => {
+  try {
+    return await placeLiquidationBid(auctionId, bidAmount);
+  } catch (error) {
+    console.error('Error placing bid on liquidation auction:', error);
+    throw error;
+  }
+};
+
+export const runLiquidationCheck = async () => {
+  try {
+    return await checkAndLiquidateVaults();
+  } catch (error) {
+    console.error('Error running liquidation check:', error);
+    throw error;
+  }
 };

@@ -8,8 +8,12 @@ import {
     closeCDP, 
     getUserCDPs,
     getCDPInfo,
-    connectWallet
+    connectWallet,
+    getCollateralPrice,
+    checkVaultLiquidationRisk,
+    getAllActiveLiquidations
 } from '../api';
+import LiquidationRiskIndicator from './LiquidationRiskIndicator';
 import './SaiInterface.css';
 
 // Define getWalletBalance function since it's missing in the API
@@ -41,6 +45,12 @@ const SaiInterface = () => {
         sai: 0,
     });
 
+    // New states for liquidation-related data
+    const [collateralPrice, setCollateralPrice] = useState(0);
+    const [liquidationRisk, setLiquidationRisk] = useState(null);
+    const [activeLiquidations, setActiveLiquidations] = useState([]);
+    const [showLiquidations, setShowLiquidations] = useState(false);
+
     const SOL_MINT = new PublicKey('So11111111111111111111111111111111111111112'); // Native SOL mint
     const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'); // USDC Mint on devnet
 
@@ -53,7 +63,7 @@ const SaiInterface = () => {
             loadUserCDPs();
         }
     }, [walletConnected]);
-    
+
     useEffect(() => {
         if (selectedCDP) {
             loadCDPDetails(selectedCDP);
@@ -65,6 +75,19 @@ const SaiInterface = () => {
             loadWalletData();
         }
     }, [walletConnected]);
+
+    useEffect(() => {
+        if (walletConnected) {
+            loadActiveLiquidations();
+        }
+    }, [walletConnected]);
+
+    useEffect(() => {
+        if (cdpDetails && cdpDetails.collateralType) {
+            loadCollateralPrice(cdpDetails.collateralType);
+            checkLiquidationRisk();
+        }
+    }, [cdpDetails]);
 
     const checkIfWalletConnected = async () => {
         try {
@@ -80,7 +103,7 @@ const SaiInterface = () => {
         try {
             const connected = await connectWallet();
             setWalletConnected(connected);
-        } catch (error) {
+            } catch (error) {
             console.error("Failed to connect wallet:", error);
         } finally {
             setLoading(false);
@@ -104,6 +127,11 @@ const SaiInterface = () => {
         try {
             setLoading(true);
             const details = await getCDPInfo(cdpAddress);
+            
+            // Determine collateral type based on mint address
+            const collateralType = details.collateralMint.toString() === SOL_MINT.toString() ? 'SOL' : 'USDC';
+            details.collateralType = collateralType;
+            
             setCdpDetails(details);
             setLoading(false);
         } catch (error) {
@@ -125,8 +153,8 @@ const SaiInterface = () => {
         e.preventDefault();
         
         if (!createCollateral || !createAmount) {
-            return;
-        }
+                return;
+            }
         
         try {
             setLoading(true);
@@ -166,8 +194,8 @@ const SaiInterface = () => {
         e.preventDefault();
         
         if (!actionAmount || !selectedCDP) {
-            return;
-        }
+                return;
+            }
         
         try {
             setLoading(true);
@@ -206,8 +234,8 @@ const SaiInterface = () => {
     
     const handleCloseCDP = async () => {
         if (!selectedCDP) {
-            return;
-        }
+                return;
+            }
         
         try {
             setLoading(true);
@@ -222,10 +250,40 @@ const SaiInterface = () => {
             setLoading(false);
         }
     };
-    
+
+    // New functions for liquidation
+    const loadCollateralPrice = async (assetType) => {
+        try {
+            const price = await getCollateralPrice(assetType);
+            setCollateralPrice(price);
+        } catch (error) {
+            console.error('Error loading collateral price:', error);
+        }
+    };
+
+    const checkLiquidationRisk = async () => {
+        if (!selectedCDP) return;
+        
+        try {
+            const risk = await checkVaultLiquidationRisk(selectedCDP);
+            setLiquidationRisk(risk);
+        } catch (error) {
+            console.error('Error checking liquidation risk:', error);
+        }
+    };
+
+    const loadActiveLiquidations = async () => {
+        try {
+            const liquidations = await getAllActiveLiquidations();
+            setActiveLiquidations(liquidations);
+        } catch (error) {
+            console.error('Error loading active liquidations:', error);
+        }
+    };
+
     // Render the CDP list view
     const renderCDPList = () => {
-        return (
+    return (
             <div className="sai-section">
                 <div className="section-header">
                     <h2>Your Collateralized Debt Positions</h2>
@@ -576,8 +634,8 @@ const SaiInterface = () => {
                             <form onSubmit={handleDrawSai}>
                                 <div className="form-group">
                                     <div className="input-with-suffix">
-                                        <input 
-                                            type="number" 
+                    <input
+                        type="number"
                                             value={view === 'detail' && actionAmount}
                                             onChange={(e) => setActionAmount(e.target.value)}
                                             placeholder="0.0"
@@ -606,7 +664,7 @@ const SaiInterface = () => {
                             <form onSubmit={handleRepaySai}>
                                 <div className="form-group">
                                     <div className="input-with-suffix">
-                                        <input 
+                    <input
                                             type="number" 
                                             value={view === 'detail' && actionAmount}
                                             onChange={(e) => setActionAmount(e.target.value)}
@@ -653,6 +711,64 @@ const SaiInterface = () => {
         );
     };
     
+    // Add this inside the render, in the 'detail' view section
+    const renderLiquidationRisk = () => {
+        if (!cdpDetails || !collateralPrice) return null;
+        
+        return (
+            <LiquidationRiskIndicator
+                collateralAmount={cdpDetails.collateralAmount}
+                debtAmount={cdpDetails.debtAmount}
+                collateralPrice={collateralPrice}
+                liquidationThreshold={110}
+                safeThreshold={150}
+            />
+        );
+    };
+
+    const renderActiveLiquidations = () => {
+        if (activeLiquidations.length === 0) {
+            return (
+                <div className="no-liquidations">
+                    <p>No active liquidations at this time.</p>
+                </div>
+            );
+        }
+
+        return (
+            <div className="liquidations-list">
+                <h3>Active Liquidations</h3>
+                {activeLiquidations.map(liquidation => (
+                    <div className="liquidation-item" key={liquidation.id}>
+                        <div className="liquidation-header">
+                            <span className="liquidation-id">{liquidation.id}</span>
+                            <span className={`liquidation-status ${liquidation.status}`}>
+                                {liquidation.status === 'auction_active' ? 'Auction Active' : 'Pending Liquidation'}
+                            </span>
+                        </div>
+                        <div className="liquidation-details">
+                            <div>Collateral: {liquidation.collateralAmount} {liquidation.collateralType}</div>
+                            <div>Debt: {liquidation.debtAmount} SAI</div>
+                            <div>Ratio: {liquidation.collateralizationRatio.toFixed(2)}%</div>
+                            {liquidation.status === 'auction_active' && liquidation.auctionData && (
+                                <div className="auction-data">
+                                    <div>Current Price: {liquidation.auctionData.currentPrice.toFixed(2)} SAI</div>
+                                    <div>Ends: {new Date(liquidation.auctionData.endTime).toLocaleString()}</div>
+                                    <button 
+                                        className="bid-button"
+                                        onClick={() => window.alert('Bidding feature coming soon!')}
+                                    >
+                                        Place Bid
+                                    </button>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        );
+    };
+
     // Main render function
     return (
         <div className="sai-interface">

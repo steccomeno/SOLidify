@@ -1,174 +1,146 @@
 import React from 'react';
-import '../styles/LandingPage.css';
-import { motion } from 'framer-motion';
+import { Link } from 'react-router-dom';
+import './LandingPage.css';
 
-// Icon components
-const ShieldIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="feature-icon">
-    <path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"></path>
-  </svg>
-);
-
-const BoltIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="feature-icon">
-    <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"></path>
-  </svg>
-);
-
-const LockIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="feature-icon">
-    <rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect>
-    <path d="M7 11V7a5 5 0 0 1 10 0v4"></path>
-  </svg>
-);
-
-const UsersIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="feature-icon">
-    <path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"></path>
-    <circle cx="9" cy="7" r="4"></circle>
-    <path d="M23 21v-2a4 4 0 0 0-3-3.87"></path>
-    <path d="M16 3.13a4 4 0 0 1 0 7.75"></path>
-  </svg>
-);
-
-const BarChartIcon = () => (
-  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="feature-icon">
-    <line x1="18" y1="20" x2="18" y2="10"></line>
-    <line x1="12" y1="20" x2="12" y2="4"></line>
-    <line x1="6" y1="20" x2="6" y2="14"></line>
-    <line x1="3" y1="20" x2="21" y2="20"></line>
-  </svg>
-);
-
-const LandingPage = ({ navigateToApp, walletConnected, connectWallet }) => {
+const LandingPage = () => {
   return (
     <div className="landing-page">
       <section className="hero-section">
-        <motion.div 
-          className="hero-content"
-          initial={{ opacity: 0, y: 20 }}
-          animate={{ opacity: 1, y: 0 }}
-          transition={{ duration: 0.5 }}
-        >
+        <div className="hero-content">
           <h1 className="hero-title">
-            <span className="gradient-text">Decentralized</span> Lending on Solana
+            <span className="gradient-text">SOLidify</span> Liquidation System
           </h1>
-          <p className="hero-description">
-            SOLiDiFi is an open-source protocol enabling borrowing against collateral with self-governed stability mechanisms.
+          <p className="hero-subtitle">
+            A secure and efficient liquidation mechanism for the Solana-based MakerDAO clone
           </p>
           <div className="hero-buttons">
-            {walletConnected ? (
-              <button className="button primary" onClick={() => navigateToApp('sai')}>
-                Launch App
-              </button>
-            ) : (
-              <button className="button primary" onClick={connectWallet}>
-                Connect Wallet
-              </button>
-            )}
-            <button className="button secondary" onClick={() => navigateToApp('governance')}>
-              Explore Governance
-            </button>
+            <Link to="/liquidations" className="primary-button">
+              Explore Liquidations
+            </Link>
+            <Link to="/vaults" className="secondary-button">
+              Manage Vaults
+            </Link>
           </div>
-        </motion.div>
-        
-        <motion.div 
-          className="hero-graphic"
-          initial={{ opacity: 0, scale: 0.9 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ duration: 0.7, delay: 0.2 }}
-        >
-          <div className="hero-graphic-inner">
-            <div className="globe"></div>
-            <div className="stats-card card-1">
-              <h4>SAI Borrowed</h4>
-              <p>$14.2M</p>
-            </div>
-            <div className="stats-card card-2">
-              <h4>Total Collateral</h4>
-              <p>$28.6M</p>
-            </div>
-          </div>
-        </motion.div>
-      </section>
-
-      <section className="metrics-section">
-        <div className="metric">
-          <h3>$28.6M</h3>
-          <p>Total Value Locked</p>
         </div>
-        <div className="metric">
-          <h3>$14.2M</h3>
-          <p>SAI in Circulation</p>
-        </div>
-        <div className="metric">
-          <h3>200%</h3>
-          <p>Average Collateralization</p>
-        </div>
-        <div className="metric">
-          <h3>5,400+</h3>
-          <p>Active CDPs</p>
+        <div className="hero-graphic">
+          <div className="graphic-circle"></div>
+          <div className="graphic-block"></div>
+          <div className="graphic-data"></div>
         </div>
       </section>
 
       <section className="features-section">
-        <h2 className="section-title">Why SOLiDiFi?</h2>
-        
+        <h2 className="section-title">Key Features</h2>
         <div className="features-grid">
-          <motion.div 
-            className="feature-card"
-            whileHover={{ y: -5, transition: { duration: 0.2 } }}
-          >
-            <ShieldIcon />
-            <h3>Collateralized Debt</h3>
-            <p>Secure loans by locking collateral, maintaining full custody of your assets at all times.</p>
-          </motion.div>
+          <div className="feature-card">
+            <div className="feature-icon dutch-auction"></div>
+            <h3>Dutch Auction Mechanism</h3>
+            <p>Optimizes collateral liquidation through a time-based descending price model</p>
+          </div>
           
-          <motion.div 
-            className="feature-card"
-            whileHover={{ y: -5, transition: { duration: 0.2 } }}
-          >
-            <BoltIcon />
-            <h3>Lightning Fast</h3>
-            <p>Experience sub-second transaction speeds and minuscule fees on Solana's high-performance network.</p>
-          </motion.div>
+          <div className="feature-card">
+            <div className="feature-icon oracle"></div>
+            <h3>Pyth Oracle Integration</h3>
+            <p>Reliable price feeds from Pyth Network ensure accurate liquidation triggers</p>
+          </div>
           
-          <motion.div 
-            className="feature-card"
-            whileHover={{ y: -5, transition: { duration: 0.2 } }}
-          >
-            <LockIcon />
-            <h3>Self-Custodial</h3>
-            <p>Maintain control of your assets with non-custodial smart contracts that ensure security and ownership.</p>
-          </motion.div>
+          <div className="feature-card">
+            <div className="feature-icon incentives"></div>
+            <h3>Liquidator Incentives</h3>
+            <p>Attractive discounts for liquidators help maintain protocol solvency</p>
+          </div>
           
-          <motion.div 
-            className="feature-card"
-            whileHover={{ y: -5, transition: { duration: 0.2 } }}
-          >
-            <UsersIcon />
-            <h3>Community Governed</h3>
-            <p>The protocol is managed by SDL token holders who vote on proposals and risk parameters.</p>
-          </motion.div>
+          <div className="feature-card">
+            <div className="feature-icon monitoring"></div>
+            <h3>Real-time Monitoring</h3>
+            <p>Advanced dashboard for tracking at-risk vaults and market conditions</p>
+          </div>
+        </div>
+      </section>
+
+      <section className="how-it-works">
+        <h2 className="section-title">How Liquidations Work</h2>
+        <div className="steps-container">
+          <div className="step">
+            <div className="step-number">1</div>
+            <div className="step-content">
+              <h3>Vault Health Monitoring</h3>
+              <p>System continuously monitors the health of all vaults, calculating collateral ratios based on real-time price data</p>
+            </div>
+          </div>
           
-          <motion.div 
-            className="feature-card"
-            whileHover={{ y: -5, transition: { duration: 0.2 } }}
-          >
-            <BarChartIcon />
-            <h3>Stability Mechanism</h3>
-            <p>Our advanced stability mechanisms ensure SAI maintains its peg to the US Dollar.</p>
-          </motion.div>
+          <div className="step">
+            <div className="step-number">2</div>
+            <div className="step-content">
+              <h3>Liquidation Trigger</h3>
+              <p>When a vault's collateral ratio falls below the minimum threshold, the liquidation process is triggered</p>
+            </div>
+          </div>
+          
+          <div className="step">
+            <div className="step-number">3</div>
+            <div className="step-content">
+              <h3>Dutch Auction Starts</h3>
+              <p>Collateral is offered in a Dutch auction starting at a premium and gradually decreasing to incentivize quick settlements</p>
+            </div>
+          </div>
+          
+          <div className="step">
+            <div className="step-number">4</div>
+            <div className="step-content">
+              <h3>Settlement & Distribution</h3>
+              <p>Winning bidder receives the collateral, debt is repaid to the protocol, and any surplus is returned to the vault owner</p>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section className="stats-section">
+        <div className="stat-item">
+          <div className="stat-value">$24.5M</div>
+          <div className="stat-label">Total Value Secured</div>
+        </div>
+        <div className="stat-item">
+          <div className="stat-value">99.8%</div>
+          <div className="stat-label">Protocol Solvency</div>
+        </div>
+        <div className="stat-item">
+          <div className="stat-value">12.7%</div>
+          <div className="stat-label">Average Liquidation Discount</div>
+        </div>
+        <div className="stat-item">
+          <div className="stat-value">184</div>
+          <div className="stat-label">Successful Auctions</div>
         </div>
       </section>
 
       <section className="cta-section">
-        <div className="cta-content">
-          <h2>Ready to Get Started?</h2>
-          <p>Create a Collateralized Debt Position (CDP) to generate SAI stablecoins.</p>
-          <button className="button primary" onClick={() => navigateToApp('sai')}>
-            Launch App
-          </button>
+        <h2>Start Participating in Liquidations</h2>
+        <p>Join the SOLidify ecosystem and earn attractive returns by participating in liquidation auctions</p>
+        <Link to="/liquidations" className="primary-button large">
+          Launch Dashboard
+        </Link>
+      </section>
+
+      <section className="resources-section">
+        <h2 className="section-title">Resources</h2>
+        <div className="resources-grid">
+          <a href="#" className="resource-card">
+            <h3>Liquidation Documentation</h3>
+            <p>In-depth guides on the liquidation process and auction mechanics</p>
+          </a>
+          <a href="#" className="resource-card">
+            <h3>Developer API</h3>
+            <p>Integrate with our liquidation engine programmatically</p>
+          </a>
+          <a href="#" className="resource-card">
+            <h3>Risk Parameters</h3>
+            <p>Learn about the risk parameters and how they affect liquidations</p>
+          </a>
+          <a href="#" className="resource-card">
+            <h3>Governance Proposals</h3>
+            <p>Vote on proposals to improve the liquidation system</p>
+          </a>
         </div>
       </section>
     </div>
