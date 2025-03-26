@@ -1,24 +1,32 @@
-[package]
-name = "your_program_name" # Replace with your program name
-version = "0.1.0"
-edition = "2018"
-
-[lib]
-crate-type = ["cdylib"]
-
-[dependencies]
-anchor-lang = "0.26.0" # Ensure this matches your Anchor version
-
 [workspace]
 members = [
     "programs/sai",
     "programs/sld"
 ]
+resolver = "2"
+
+[workspace.dependencies]
+anchor-lang = { git = "https://github.com/coral-xyz/anchor", tag = "v0.24.2", features = ["init-if-needed"] }
+anchor-spl = { git = "https://github.com/coral-xyz/anchor", tag = "v0.24.2" }
+spl-token = "=3.2.0"
+solana-program = "=1.9.13"
+bytemuck = "=1.7.2"
+ahash = "=0.7.6"
+regex-syntax = "=0.6.29"
+libc = "=0.2.146"
+toml_edit = "=0.19.8"
+hashbrown = "=0.11.2"
+borsh = "=0.9.3"
+borsh-derive = "=0.9.3"
+once_cell = "=1.17.1"
+regex = "=1.7.3"
+toml_datetime = "=0.6.2"
 
 [profile.release]
 overflow-checks = true
 lto = "fat"
 codegen-units = 1
+
 [profile.release.build-override]
 opt-level = 3
 incremental = false

@@ -1,8 +1,7 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Token, TokenAccount, Mint, MintTo, Transfer};
-use anchor_lang::solana_program::{instruction::Instruction, program::invoke_signed};
+use anchor_spl::token::{self, Mint, Token, TokenAccount};
 
-declare_id!("SLDGkQDvmaXaDYpXTAXxxSQkgRdotTwNNWuZ9AHgK9w");
+declare_id!("GKa59ebtzxEwcGNJEfAb7SEUkUBS1bDtr8GwdH1RCtN9");
 
 #[program]
 pub mod sld {
@@ -11,16 +10,15 @@ pub mod sld {
     // Initialize the SLD token and governance system
     pub fn initialize_governance(
         ctx: Context<InitializeGovernance>,
-        min_vote_threshold: u64,
+        quorum: u64,
         voting_period: i64,
     ) -> Result<()> {
         let governance = &mut ctx.accounts.governance;
-        governance.admin = ctx.accounts.admin.key();
-        governance.sld_mint = ctx.accounts.sld_mint.key();
-        governance.min_vote_threshold = min_vote_threshold;
+        governance.admin = ctx.accounts.payer.key();
+        governance.quorum = quorum;
         governance.voting_period = voting_period;
+        governance.total_supply = 0;
         governance.proposal_count = 0;
-
         Ok(())
     }
 
@@ -29,19 +27,29 @@ pub mod sld {
         ctx: Context<CreateProposal>,
         title: String,
         description: String,
-        voting_period: i64,
     ) -> Result<()> {
-        let governance = &ctx.accounts.governance;
         let proposal = &mut ctx.accounts.proposal;
-        
+        let governance = &mut ctx.accounts.governance;
+
+        // Check if the proposer has enough voting power
+        require!(
+            ctx.accounts.proposer_token_account.amount >= governance.quorum,
+            ErrorCode::InsufficientVotingPower
+        );
+
+        // Initialize proposal
         proposal.proposer = ctx.accounts.proposer.key();
         proposal.title = title;
         proposal.description = description;
-        proposal.created_at = ctx.accounts.clock.unix_timestamp;
-        proposal.voting_period = voting_period;
         proposal.for_votes = 0;
         proposal.against_votes = 0;
+        proposal.start_time = Clock::get()?.unix_timestamp;
+        proposal.end_time = proposal.start_time + governance.voting_period;
         proposal.executed = false;
+        proposal.cancelled = false;
+
+        // Increment proposal count
+        governance.proposal_count = governance.proposal_count.checked_add(1).unwrap();
 
         Ok(())
     }
@@ -49,48 +57,35 @@ pub mod sld {
     // Cast a vote on a proposal
     pub fn cast_vote(
         ctx: Context<CastVote>,
-        vote_amount: u64,
-        support: bool,
+        vote: bool,
     ) -> Result<()> {
         let proposal = &mut ctx.accounts.proposal;
-        let vote_record = &mut ctx.accounts.vote_record;
-        
-        // Ensure proposal is still active
-        let current_time = ctx.accounts.clock.unix_timestamp;
+        let voter = &mut ctx.accounts.voter;
+        let clock = Clock::get()?;
+
+        // Check if proposal is still active
         require!(
-            current_time <= proposal.created_at + proposal.voting_period,
-            ErrorCode::VotingClosed
+            clock.unix_timestamp >= proposal.start_time && 
+            clock.unix_timestamp <= proposal.end_time,
+            ErrorCode::InvalidVotingTime
         );
-        
-        // Ensure proposal hasn't been executed
-        require!(!proposal.executed, ErrorCode::ProposalAlreadyExecuted);
-        
-        // Initialize vote record
-        vote_record.voter = ctx.accounts.voter.key();
-        vote_record.proposal = proposal.key();
-        vote_record.vote_amount = vote_amount;
-        vote_record.support = support;
-        
-        // Lock tokens by transferring them to governance account
-        let transfer_tokens_ctx = CpiContext::new(
-            ctx.accounts.token_program.to_account_info(),
-            token::Transfer {
-                from: ctx.accounts.voter_sld.to_account_info(),
-                to: ctx.accounts.governance_sld.to_account_info(),
-                authority: ctx.accounts.voter.to_account_info(),
-            },
-        );
-        token::transfer(transfer_tokens_ctx, vote_amount)?;
-        
-        // Update proposal vote counts
-        if support {
-            proposal.for_votes = proposal.for_votes.checked_add(vote_amount)
-                .ok_or(ErrorCode::MathOverflow)?;
+
+        // Check if voter hasn't voted yet
+        require!(!voter.has_voted, ErrorCode::AlreadyVoted);
+
+        // Record vote
+        let voting_power = ctx.accounts.voter_token_account.amount;
+        if vote {
+            proposal.for_votes = proposal.for_votes.checked_add(voting_power).unwrap();
         } else {
-            proposal.against_votes = proposal.against_votes.checked_add(vote_amount)
-                .ok_or(ErrorCode::MathOverflow)?;
+            proposal.against_votes = proposal.against_votes.checked_add(voting_power).unwrap();
         }
-        
+
+        voter.has_voted = true;
+        voter.vote = vote;
+        voter.voting_power = voting_power;
+        voter.proposal = proposal.key();
+
         Ok(())
     }
     
@@ -98,34 +93,25 @@ pub mod sld {
     pub fn execute_proposal(ctx: Context<ExecuteProposal>) -> Result<()> {
         let proposal = &mut ctx.accounts.proposal;
         let governance = &ctx.accounts.governance;
-        
-        // Check if voting period has ended
-        let current_time = ctx.accounts.clock.unix_timestamp;
+        let clock = Clock::get()?;
+
+        // Check if proposal has ended
         require!(
-            current_time > proposal.created_at + proposal.voting_period,
-            ErrorCode::VotingStillOpen
+            clock.unix_timestamp > proposal.end_time,
+            ErrorCode::ProposalStillActive
         );
-        
-        // Check if proposal already executed
-        require!(!proposal.executed, ErrorCode::ProposalAlreadyExecuted);
         
         // Check if proposal has enough votes
         require!(
-            proposal.for_votes >= governance.min_vote_threshold,
+            proposal.for_votes >= governance.quorum,
             ErrorCode::InsufficientVotes
         );
         
-        // Check if proposal passed
-        require!(
-            proposal.for_votes > proposal.against_votes,
-            ErrorCode::ProposalRejected
-        );
+        // Check if proposal hasn't been executed yet
+        require!(!proposal.executed, ErrorCode::ProposalAlreadyExecuted);
         
         // Mark proposal as executed
         proposal.executed = true;
-        
-        // Implementation of the actual execution logic would depend on what the proposal is for
-        // This could involve changing parameters in the governance account or other actions
         
         Ok(())
     }
@@ -138,27 +124,29 @@ pub mod sld {
         );
 
         // Mint SLD tokens to the admin
-        let mint_sld_ctx = CpiContext::new_with_signer(
-            ctx.accounts.token_program.to_account_info(),
-            token::MintTo {
-                mint: ctx.accounts.sld_mint.to_account_info(),
-                to: ctx.accounts.admin_sld.to_account_info(),
-                authority: ctx.accounts.mint_authority.to_account_info(),
-            },
-            &[&[b"mint_authority", &[ctx.bumps.mint_authority]]],
+        let mint_authority_seeds = &[b"mint_authority".as_ref(), &[*ctx.bumps.get("mint_authority").unwrap()]];
+        let signer = &[&mint_authority_seeds[..]];
+        
+        let cpi_accounts = token::MintTo {
+            mint: ctx.accounts.sld_mint.to_account_info(),
+            to: ctx.accounts.admin_sld.to_account_info(),
+            authority: ctx.accounts.mint_authority.to_account_info(),
+        };
+        
+        let cpi_program = ctx.accounts.token_program.to_account_info();
+        let cpi_ctx = CpiContext::new_with_signer(
+            cpi_program,
+            cpi_accounts,
+            signer,
         );
-        token::mint_to(mint_sld_ctx, amount)?;
+        
+        token::mint_to(cpi_ctx, amount)?;
 
         Ok(())
     }
     
     // Initialize the SLD mint with a PDA as the mint authority
-    pub fn initialize_sld_mint(
-        ctx: Context<InitializeSldMint>,
-    ) -> Result<()> {
-        // The mint is already initialized by the time this instruction is called
-        // We're just setting up the mint authority and other parameters
-        // Nothing to do here since we're using anchor's init feature
+    pub fn initialize_sld_mint(_ctx: Context<InitializeSldMint>) -> Result<()> {
         Ok(())
     }
 }
@@ -167,148 +155,130 @@ pub mod sld {
 
 #[account]
 pub struct Governance {
-    pub admin: Pubkey,             // 32
-    pub sld_mint: Pubkey,          // 32
-    pub min_vote_threshold: u64,   // 8
-    pub voting_period: i64,        // 8
-    pub proposal_count: u64,       // 8
+    pub admin: Pubkey,
+    pub quorum: u64,
+    pub voting_period: i64,
+    pub total_supply: u64,
+    pub proposal_count: u64,
 }
 
 impl Governance {
-    pub const LEN: usize = 32 + 32 + 8 + 8 + 8;
+    pub const LEN: usize = 32 + // admin
+                          8 + // quorum
+                          8 + // voting_period
+                          8 + // total_supply
+                          8; // proposal_count
 }
 
 #[account]
 pub struct Proposal {
-    pub proposer: Pubkey,          // 32
-    pub title: String,             // 4 + 100
-    pub description: String,       // 4 + 500
-    pub created_at: i64,           // 8
-    pub voting_period: i64,        // 8
-    pub for_votes: u64,            // 8
-    pub against_votes: u64,        // 8
-    pub executed: bool,            // 1
+    pub proposer: Pubkey,
+    pub title: String,
+    pub description: String,
+    pub for_votes: u64,
+    pub against_votes: u64,
+    pub start_time: i64,
+    pub end_time: i64,
+    pub executed: bool,
+    pub cancelled: bool,
 }
 
 impl Proposal {
-    pub const LEN: usize = 32 + (4 + 100) + (4 + 500) + 8 + 8 + 8 + 8 + 1;
+    pub const LEN: usize = 32 + // proposer
+                          100 + // title (max length)
+                          1000 + // description (max length)
+                          8 + // for_votes
+                          8 + // against_votes
+                          8 + // start_time
+                          8 + // end_time
+                          1 + // executed
+                          1; // cancelled
 }
 
 #[account]
-pub struct VoteRecord {
-    pub voter: Pubkey,             // 32
-    pub proposal: Pubkey,          // 32
-    pub vote_amount: u64,          // 8
-    pub support: bool,             // 1
+pub struct Voter {
+    pub has_voted: bool,
+    pub vote: bool,
+    pub voting_power: u64,
+    pub proposal: Pubkey,
 }
 
-impl VoteRecord {
-    pub const LEN: usize = 32 + 32 + 8 + 1;
+impl Voter {
+    pub const LEN: usize = 1 + // has_voted
+                          1 + // vote
+                          8 + // voting_power
+                          32; // proposal
 }
 
 // Contexts
 
 #[derive(Accounts)]
 pub struct InitializeGovernance<'info> {
-    #[account(mut)]
-    pub admin: Signer<'info>,
-    
     #[account(
         init,
-        payer = admin,
+        payer = payer,
         space = 8 + Governance::LEN,
         seeds = [b"governance"],
         bump
     )]
     pub governance: Account<'info, Governance>,
-    
-    #[account(
-        init,
-        payer = admin,
-        mint::decimals = 6,
-        mint::authority = mint_authority
-    )]
     pub sld_mint: Account<'info, Mint>,
-    
-    /// CHECK: This is the PDA that will be the mint authority
+    /// CHECK: This is safe because we're just using it as a PDA for signing
     #[account(
         seeds = [b"mint_authority"],
-        bump
+        bump,
     )]
     pub mint_authority: UncheckedAccount<'info>,
-    
-    pub token_program: Program<'info, Token>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
     pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
 pub struct CreateProposal<'info> {
-    #[account(mut)]
-    pub proposer: Signer<'info>,
-    
     #[account(
         init,
         payer = proposer,
-        space = 8 + Proposal::LEN
+        space = 8 + Proposal::LEN,
     )]
     pub proposal: Account<'info, Proposal>,
-    
+    #[account(mut)]
     pub governance: Account<'info, Governance>,
-    
+    pub proposer_token_account: Account<'info, TokenAccount>,
+    #[account(mut)]
+    pub proposer: Signer<'info>,
     pub system_program: Program<'info, System>,
-    pub clock: Sysvar<'info, Clock>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
 pub struct CastVote<'info> {
     #[account(mut)]
-    pub voter: Signer<'info>,
-    
-    #[account(mut)]
-    pub voter_sld: Account<'info, TokenAccount>,
-    
-    #[account(mut)]
     pub proposal: Account<'info, Proposal>,
-    
     #[account(
-        init,
-        payer = voter,
-        space = 8 + VoteRecord::LEN,
-        seeds = [
-            b"vote_record",
-            proposal.key().as_ref(),
-            voter.key().as_ref()
-        ],
+        init_if_needed,
+        payer = voter_signer,
+        space = 8 + Voter::LEN,
+        seeds = [b"voter", proposal.key().as_ref(), voter_signer.key().as_ref()],
         bump
     )]
-    pub vote_record: Account<'info, VoteRecord>,
-    
+    pub voter: Account<'info, Voter>,
+    pub voter_token_account: Account<'info, TokenAccount>,
     #[account(mut)]
-    pub governance: Account<'info, Governance>,
-    
-    /// CHECK: This account is for storing locked SLD tokens
-    #[account(mut)]
-    pub governance_sld: Account<'info, TokenAccount>,
-    
-    pub sld_mint: Account<'info, Mint>,
-    
-    pub token_program: Program<'info, Token>,
+    pub voter_signer: Signer<'info>,
     pub system_program: Program<'info, System>,
-    pub clock: Sysvar<'info, Clock>,
+    pub rent: Sysvar<'info, Rent>,
 }
 
 #[derive(Accounts)]
 pub struct ExecuteProposal<'info> {
     #[account(mut)]
-    pub executor: Signer<'info>,
-    
-    #[account(mut)]
     pub proposal: Account<'info, Proposal>,
-    
     pub governance: Account<'info, Governance>,
-    
-    pub clock: Sysvar<'info, Clock>,
+    #[account(mut)]
+    pub executor: Signer<'info>,
 }
 
 #[derive(Accounts)]
@@ -337,26 +307,17 @@ pub struct MintSld<'info> {
 
 #[derive(Accounts)]
 pub struct InitializeSldMint<'info> {
-    #[account(mut)]
-    pub admin: Signer<'info>,
-    
     #[account(
         init,
-        payer = admin,
+        payer = payer,
         mint::decimals = 6,
-        mint::authority = mint_authority,
+        mint::authority = payer.key(),
     )]
     pub sld_mint: Account<'info, Mint>,
-    
-    /// CHECK: PDA used as mint authority
-    #[account(
-        seeds = [b"mint_authority"],
-        bump,
-    )]
-    pub mint_authority: AccountInfo<'info>,
-    
-    pub token_program: Program<'info, Token>,
+    #[account(mut)]
+    pub payer: Signer<'info>,
     pub system_program: Program<'info, System>,
+    pub token_program: Program<'info, Token>,
     pub rent: Sysvar<'info, Rent>,
 }
 
@@ -399,21 +360,21 @@ pub enum ErrorCode {
     #[msg("Not authorized to perform this action")]
     NotAuthorized,
     
-    #[msg("Math operation overflow")]
-    MathOverflow,
+    #[msg("Insufficient voting power")]
+    InsufficientVotingPower,
     
-    #[msg("Voting period has closed")]
-    VotingClosed,
+    #[msg("Invalid voting time")]
+    InvalidVotingTime,
     
-    #[msg("Voting period is still open")]
-    VotingStillOpen,
+    #[msg("Already voted")]
+    AlreadyVoted,
     
-    #[msg("Proposal has already been executed")]
-    ProposalAlreadyExecuted,
+    #[msg("Proposal is still active")]
+    ProposalStillActive,
     
-    #[msg("Proposal does not have enough votes to execute")]
+    #[msg("Insufficient votes")]
     InsufficientVotes,
     
-    #[msg("Proposal was rejected (more against votes than for votes)")]
-    ProposalRejected,
+    #[msg("Proposal already executed")]
+    ProposalAlreadyExecuted,
 } 
