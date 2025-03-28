@@ -1,73 +1,80 @@
 const path = require('path');
 const webpack = require('webpack');
 const HtmlWebpackPlugin = require('html-webpack-plugin');
+const CopyWebpackPlugin = require('copy-webpack-plugin');
 
 module.exports = {
   mode: 'development',
-  entry: './src/index.webpack.js',
+  entry: ['./src/index.js'],
   output: {
     path: path.resolve(__dirname, 'build'),
     filename: 'bundle.js',
+    publicPath: '/'
   },
   devServer: {
-    port: 3000,
-    hot: true,
+    static: {
+      directory: path.join(__dirname, 'public')
+    },
     historyApiFallback: true,
+    port: 3001,
+    hot: true,
+    open: true
   },
   resolve: {
-    extensions: ['.js', '.jsx', '.json', '.ts', '.tsx'],
+    extensions: ['.js', '.jsx'],
     fallback: {
-      "assert": require.resolve("assert/"),
       "crypto": require.resolve("crypto-browserify"),
       "stream": require.resolve("stream-browserify"),
-      "buffer": require.resolve("buffer/"),
+      "assert": require.resolve("assert/"),
       "http": require.resolve("stream-http"),
       "https": require.resolve("https-browserify"),
       "os": require.resolve("os-browserify/browser"),
-      "path": require.resolve("path-browserify"),
-      "process": require.resolve("process/browser"),
-      "url": require.resolve("url/"),
-      "zlib": require.resolve("browserify-zlib"),
-      "fs": false,
-      "constants": false,
-      "net": false,
-      "tls": false,
-      "child_process": false
-    },
+      "url": require.resolve("url/")
+    }
   },
   module: {
     rules: [
       {
-        test: /\.(js|jsx|ts|tsx)$/,
+        test: /\.(js|jsx)$/,
         exclude: /node_modules/,
         use: {
-          loader: 'babel-loader',
-          options: {
-            presets: ['@babel/preset-env', '@babel/preset-react'],
-          },
-        },
+          loader: 'babel-loader'
+        }
       },
       {
         test: /\.css$/,
-        use: ['style-loader', 'css-loader'],
+        use: ['style-loader', 'css-loader']
       },
       {
-        test: /\.(png|svg|jpg|jpeg|gif)$/i,
-        type: 'asset/resource',
-      },
-    ],
+        test: /\.(png|svg|jpg|jpeg|gif|ico)$/,
+        type: 'asset/resource'
+      }
+    ]
   },
   plugins: [
     new HtmlWebpackPlugin({
       template: './public/index.html',
+      favicon: './public/favicon.ico'
     }),
-    new webpack.DefinePlugin({
-      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development')
+    new CopyWebpackPlugin({
+      patterns: [
+        { 
+          from: 'public',
+          globOptions: {
+            ignore: ['**/index.html']
+          }
+        }
+      ]
     }),
     new webpack.ProvidePlugin({
       process: 'process/browser',
-      Buffer: ['buffer', 'Buffer'],
+      Buffer: ['buffer', 'Buffer']
     }),
+    new webpack.DefinePlugin({
+      'process.env.NODE_ENV': JSON.stringify(process.env.NODE_ENV || 'development'),
+      'process.env.REACT_APP_SOLANA_NETWORK': JSON.stringify(process.env.REACT_APP_SOLANA_NETWORK || 'devnet'),
+      'process.env.REACT_APP_SOLANA_RPC_HOST': JSON.stringify(process.env.REACT_APP_SOLANA_RPC_HOST || 'https://api.devnet.solana.com')
+    })
   ],
   ignoreWarnings: [
     /Failed to parse source map/,

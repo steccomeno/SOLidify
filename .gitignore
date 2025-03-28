@@ -10,9 +10,11 @@
 
 # production
 /build
+/dist
 
 # misc
 .DS_Store
+.env
 .env.local
 .env.development.local
 .env.test.local
@@ -52,3 +54,31 @@ target/
 **/target/
 *.so
 *.o
+
+# Solana
+test-ledger/
+.anchor
+target/
+**/*.rs.bk
+node_modules/
+
+# Wallet files
+*wallet*.json
+deploy-wallet.json
+id.json
+keys/
+
+# Temporary files
+temp_project/
+*.log
+.temp
+.cache
+
+# Docker
+.dockerignore
+Dockerfile
+docker-compose.yml
+
+# Build scripts
+fix.sh
+fix_build.sh

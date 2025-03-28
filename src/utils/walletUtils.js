@@ -9,10 +9,47 @@ import { useWallet as useWalletAdapter } from '@solana/wallet-adapter-react';
 
 // Constants
 const NETWORK = WalletAdapterNetwork.Devnet; // Use Devnet for development
-const RPC_ENDPOINT = clusterApiUrl(NETWORK);
+const RPC_ENDPOINT = process.env.REACT_APP_SOLANA_RPC_HOST || 'http://localhost:8899';
 
 // Create a connection to the Solana cluster
 export const connection = new Connection(RPC_ENDPOINT);
+
+// Standalone wallet utility functions
+export const isWalletConnected = (wallet) => {
+  return wallet && wallet.connected && wallet.publicKey;
+};
+
+export const connectWallet = async () => {
+  try {
+    const wallet = new PhantomWalletAdapter();
+    await wallet.connect();
+    return {
+      success: true,
+      wallet,
+      address: wallet.publicKey?.toString()
+    };
+  } catch (error) {
+    console.error('Failed to connect wallet:', error);
+    return {
+      success: false,
+      wallet: null,
+      address: null
+    };
+  }
+};
+
+export const getWalletBalance = async (publicKey) => {
+  try {
+    if (!publicKey) {
+      throw new Error('No wallet public key provided');
+    }
+    const balance = await connection.getBalance(new PublicKey(publicKey));
+    return balance / 1_000_000_000; // Convert lamports to SOL
+  } catch (error) {
+    console.error('Failed to get wallet balance:', error);
+    return 0;
+  }
+};
 
 /**
  * Hook for using wallet functionality in React components
@@ -55,7 +92,7 @@ export const useWallet = () => {
       console.error('Failed to get wallet balance:', error);
       return 0;
     }
-  }, [wallet.publicKey, connection]);
+  }, [wallet.publicKey]);
   
   const hasSufficientBalance = useCallback(async (amount) => {
     try {
@@ -107,5 +144,8 @@ export const useWallet = () => {
 
 export default {
   useWallet,
-  connection
+  connection,
+  isWalletConnected,
+  connectWallet,
+  getWalletBalance
 }; 
