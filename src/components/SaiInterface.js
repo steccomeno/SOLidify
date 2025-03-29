@@ -19,6 +19,7 @@ import {
     isAPIInitialized
 } from '../api/index';
 import LiquidationRiskIndicator from './LiquidationRiskIndicator';
+import SaiTransfer from './SaiTransfer';
 import './SaiInterface.css';
 require('@solana/wallet-adapter-react-ui/styles.css');
 
@@ -33,7 +34,7 @@ const SaiInterface = () => {
     const [isCreating, setIsCreating] = useState(false);
     const [selectedCDP, setSelectedCDP] = useState(null);
     const [cdpDetails, setCdpDetails] = useState(null);
-    const [view, setView] = useState('list'); // 'list', 'create', 'detail'
+    const [view, setView] = useState('list'); // 'list', 'create', 'detail', 'transfer'
     
     // Form states
     const [createAmount, setCreateAmount] = useState('');
@@ -813,53 +814,111 @@ const SaiInterface = () => {
         );
     };
 
+    // Add a function to refresh wallet data after transfers
+    const refreshWalletData = async () => {
+        await loadWalletData();
+    };
+
     // Main render function
     return (
-        <div className="sai-interface">
-            <div className="sai-content">
-                <div className="sai-header">
-                    <h2>CDP Management</h2>
-                    <div className="wallet-info">
-                        {connected ? (
-                            <>
-                                <span>Connected: {publicKey.toString().slice(0, 4)}...{publicKey.toString().slice(-4)}</span>
-                                <span>SOL Balance: {walletBalance.sol}</span>
-                                <span>SAI Balance: {walletBalance.sai}</span>
-                            </>
-                        ) : (
-                            <WalletMultiButton className="wallet-button" />
-                        )}
-                    </div>
+        <div className="sai-interface-container">
+            <div className="header">
+                <h1>SAI Stablecoin Interface</h1>
+                <div className="wallet-section">
+                    {!connected ? (
+                        <div className="connect-wallet-prompt">
+                            <WalletMultiButton />
+                            <p>Connect your wallet to manage SAI stablecoins</p>
+                        </div>
+                    ) : (
+                        <div className="wallet-info">
+                            <div className="wallet-balance">
+                                <div className="balance-item">
+                                    <span className="balance-label">SOL Balance:</span>
+                                    <span className="balance-value">{walletBalance.sol.toFixed(4)} SOL</span>
+                                </div>
+                                <div className="balance-item">
+                                    <span className="balance-label">SAI Balance:</span>
+                                    <span className="balance-value">{walletBalance.sai.toFixed(2)} SAI</span>
+                                </div>
+                            </div>
+                            <div className="wallet-address">
+                                <span>{publicKey.toString().substring(0, 4)}...{publicKey.toString().substring(publicKey.toString().length - 4)}</span>
+                            </div>
+                        </div>
+                    )}
                 </div>
-
-                <div className="sai-navigation">
-                    <button 
-                        className={`nav-button ${view === 'list' ? 'active' : ''}`}
-                        onClick={() => setView('list')}
-                    >
-                        My CDPs
-                    </button>
-                    <button 
-                        className={`nav-button ${view === 'create' ? 'active' : ''}`}
-                        onClick={() => setView('create')}
-                    >
-                        Create CDP
-                    </button>
-                </div>
-
-                {loading ? (
-                    <div className="loading-container">
-                        <div className="loading-spinner"></div>
-                        <p>Loading...</p>
-                    </div>
-                ) : (
-                    <>
-                        {view === 'list' && renderCDPList()}
-                        {view === 'create' && renderCreateCDPForm()}
-                        {view === 'detail' && renderCDPDetail()}
-                    </>
-                )}
             </div>
+            
+            {connected && (
+                <div className="sai-tabs">
+                    <button 
+                        className={view === 'list' ? 'active' : ''} 
+                        onClick={() => setView('list')}>
+                        My Vaults
+                    </button>
+                    <button 
+                        className={view === 'create' ? 'active' : ''} 
+                        onClick={() => setView('create')}>
+                        Create Vault
+                    </button>
+                    <button 
+                        className={view === 'transfer' ? 'active' : ''} 
+                        onClick={() => setView('transfer')}>
+                        Transfer SAI
+                    </button>
+                    {showLiquidations && (
+                        <button 
+                            className={view === 'liquidations' ? 'active' : ''} 
+                            onClick={() => setView('liquidations')}>
+                            Liquidation Auctions
+                        </button>
+                    )}
+                </div>
+            )}
+            
+            {error && (
+                <div className="error-message">
+                    <p>{error}</p>
+                    <button onClick={() => setError(null)}>Dismiss</button>
+                </div>
+            )}
+            
+            {!connected ? (
+                <div className="sai-landing">
+                    <div className="sai-info">
+                        <h2>What is SAI?</h2>
+                        <p>SAI is a decentralized stablecoin built on Solana, backed by crypto collateral. Create a vault, deposit collateral, and mint SAI tokens pegged to the US dollar.</p>
+                        
+                        <h3>Key Benefits</h3>
+                        <ul>
+                            <li>Fully collateralized and transparent</li>
+                            <li>Governed by token holders</li>
+                            <li>Fast and inexpensive transactions on Solana</li>
+                        </ul>
+                    </div>
+                </div>
+            ) : (
+                <div className="sai-main">
+                    {loading && (
+                        <div className="loading-overlay">
+                            <div className="loading-spinner"></div>
+                            <p>Loading...</p>
+                        </div>
+                    )}
+                    
+                    {view === 'list' && renderCDPList()}
+                    {view === 'create' && renderCreateCDPForm()}
+                    {view === 'detail' && renderCDPDetail()}
+                    {view === 'transfer' && (
+                        <SaiTransfer 
+                            onSuccess={refreshWalletData} 
+                            walletBalance={walletBalance} 
+                        />
+                    )}
+                    {view === 'liquidations' && renderActiveLiquidations()}
+                </div>
+            )}
         </div>
     );
 };

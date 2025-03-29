@@ -112,11 +112,16 @@ export const getWalletBalance = async () => {
     if (!solanaAPI) {
         throw new Error('API not initialized. Please connect your wallet first.');
     }
-    // TODO: Implement real wallet balance check
-    return {
-        sol: 2.45,
-        sai: 120.50,
-    };
+    
+    try {
+        return await solanaAPI.getTokenBalances();
+    } catch (error) {
+        console.error('Error getting wallet balance:', error);
+        return {
+            sol: 0,
+            sai: 0,
+        };
+    }
 };
 
 export const getCollateralPrice = async (collateralType) => {
@@ -238,4 +243,21 @@ export const bidOnLiquidationAuction = async (auctionId, bidAmount) => {
         success: true,
         message: 'Bid placed successfully'
     };
+};
+
+// New function to transfer SAI tokens
+export const transferSai = async (recipientAddress, amount) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    
+    try {
+        return await solanaAPI.transferToken(recipientAddress, amount);
+    } catch (error) {
+        console.error('Error transferring SAI tokens:', error);
+        return {
+            success: false,
+            error: error.message || 'Failed to transfer SAI tokens'
+        };
+    }
 }; 

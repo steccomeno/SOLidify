@@ -1,11 +1,14 @@
 import { Program, AnchorProvider } from '@project-serum/anchor';
 import { PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount } from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createTransferInstruction } from '@solana/spl-token';
 import BN from 'bn.js';
 import saiIDL from '../idl/sai.json';
 
 const PROGRAM_ID = new PublicKey('Cigtkftzwjx3pB2nCWiG85NPxhQvgF47qzEjpbkEdUsf');
 const SOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
+
+// For the new SAI token we created
+const SAI_MINT = new PublicKey('GwUwBTjqXn1s5CmRToaXcJYUAvAh4sN1CjU68VGpUjVE');
 
 export class SolanaAPI {
     constructor(connection, wallet) {
@@ -330,6 +333,112 @@ export class SolanaAPI {
             return {
                 success: false,
                 error: error.message
+            };
+        }
+    }
+
+    async getTokenBalances() {
+        try {
+            // Get SOL balance
+            const solBalance = await this.connection.getBalance(this.wallet.publicKey);
+            
+            // Get SAI balance
+            let saiBalance = 0;
+            try {
+                const saiTokenAccount = await getAssociatedTokenAddress(
+                    SAI_MINT,
+                    this.wallet.publicKey
+                );
+                
+                try {
+                    const tokenAccount = await getAccount(this.connection, saiTokenAccount);
+                    saiBalance = Number(tokenAccount.amount) / 1_000_000; // Assuming 6 decimals
+                } catch (error) {
+                    // Token account doesn't exist yet, which is fine
+                    console.log('SAI token account not found, balance is 0');
+                }
+            } catch (error) {
+                console.error('Error getting SAI balance:', error);
+            }
+            
+            return {
+                sol: solBalance / 1_000_000_000, // Convert lamports to SOL
+                sai: saiBalance
+            };
+        } catch (error) {
+            console.error('Error getting token balances:', error);
+            throw error;
+        }
+    }
+    
+    async transferToken(recipientAddress, amount) {
+        try {
+            // Validate recipient address
+            const recipient = new PublicKey(recipientAddress);
+            
+            // Convert amount to lamports (SAI has 6 decimals)
+            const amountLamports = Math.floor(amount * 1_000_000);
+            
+            // Get sender's SAI token account
+            const senderTokenAccount = await getAssociatedTokenAddress(
+                SAI_MINT,
+                this.wallet.publicKey
+            );
+            
+            // Get or create recipient's SAI token account
+            let recipientTokenAccount;
+            try {
+                recipientTokenAccount = await getAssociatedTokenAddress(
+                    SAI_MINT,
+                    recipient
+                );
+                
+                // Check if recipient token account exists
+                try {
+                    await getAccount(this.connection, recipientTokenAccount);
+                } catch (error) {
+                    // Account doesn't exist, create it
+                    const transaction = new Transaction().add(
+                        createAssociatedTokenAccountInstruction(
+                            this.wallet.publicKey,
+                            recipientTokenAccount,
+                            recipient,
+                            SAI_MINT
+                        )
+                    );
+                    
+                    const createAccountSig = await this.wallet.sendTransaction(transaction);
+                    await this.connection.confirmTransaction(createAccountSig);
+                }
+            } catch (error) {
+                console.error('Error setting up recipient token account:', error);
+                throw new Error('Failed to set up recipient token account');
+            }
+            
+            // Create transfer transaction
+            const transferTx = new Transaction().add(
+                createTransferInstruction(
+                    senderTokenAccount,
+                    recipientTokenAccount,
+                    this.wallet.publicKey,
+                    amountLamports
+                )
+            );
+            
+            // Send transaction
+            const signature = await this.wallet.sendTransaction(transferTx);
+            await this.connection.confirmTransaction(signature);
+            
+            return {
+                success: true,
+                signature,
+                message: `Successfully transferred ${amount} SAI to ${recipientAddress}`
+            };
+        } catch (error) {
+            console.error('Error transferring tokens:', error);
+            return {
+                success: false,
+                error: error.message || 'Failed to transfer tokens'
             };
         }
     }
