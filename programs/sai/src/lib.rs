@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Mint, MintTo, Transfer, Burn}
 use anchor_lang::solana_program::system_instruction;
 use anchor_spl::token::spl_token::instruction::AuthorityType;
 
-declare_id!("Cigtkftzwjx3pB2nCWiG85NPxhQvgF47qzEjpbkEdUsf");
+declare_id!("CB2Mj3T59QjuxmSaZyFyqJ3axfmT1Wk3s9jZyss1RvaA");
 
 #[program]
 pub mod sai {
@@ -12,20 +12,30 @@ pub mod sai {
     // Initialize a new CDP (Collateralized Debt Position)
     pub fn initialize_cdp(
         ctx: Context<InitializeCdp>,
-        collateral_amount: u64,
-        sai_amount: u64,
     ) -> Result<()> {
         let cdp = &mut ctx.accounts.cdp;
         let clock = Clock::get()?;
         
         // Set up the initial CDP data
         cdp.owner = ctx.accounts.owner.key();
-        cdp.collateral_amount = collateral_amount;
-        cdp.sai_debt = sai_amount;
-        cdp.collateral_type = "SOL".to_string(); // For now, we only support SOL as collateral
+        cdp.collateral_amount = 0;
+        cdp.sai_debt = 0;
+        cdp.collateral_type = *b"SOL\0"; // Fixed size array for "SOL\0"
         cdp.created_at = clock.unix_timestamp;
         cdp.last_updated_at = clock.unix_timestamp;
         cdp.status = CdpStatus::Active;
+        
+        Ok(())
+    }
+    
+    // Initialize the vault for a new CDP
+    pub fn initialize_vault(
+        ctx: Context<InitializeVault>,
+        collateral_amount: u64,
+        sai_amount: u64,
+    ) -> Result<()> {
+        let cdp = &mut ctx.accounts.cdp;
+        let clock = Clock::get()?;
         
         // Transfer collateral from owner to the vault
         let cpi_accounts = Transfer {
@@ -59,6 +69,11 @@ pub mod sai {
             
             token::mint_to(cpi_ctx, sai_amount)?;
         }
+        
+        // Update CDP data
+        cdp.collateral_amount = collateral_amount;
+        cdp.sai_debt = sai_amount;
+        cdp.last_updated_at = clock.unix_timestamp;
         
         emit!(CDPCreatedEvent {
             cdp: cdp.key(),
@@ -343,19 +358,8 @@ pub mod sai {
     }
     
     // Initialize the SAI mint with a PDA as the mint authority
-    pub fn initialize_sai_mint(_ctx: Context<InitializeSaiMint>) -> Result<()> {
-        Ok(())
-    }
-
-    pub fn initialize(ctx: Context<Initialize>, _collateral_ratio: u64) -> Result<()> {
-        let _sai_mint = &ctx.accounts.sai_mint;
-        let _mint_authority = &ctx.accounts.mint_authority;
-        
-        // Initialize the mint authority PDA
-        let mint_auth_seeds = &[b"mint_authority".as_ref(), &[*ctx.bumps.get("mint_authority").unwrap()]];
-        let _signer = &[&mint_auth_seeds[..]];
-
-        // Set mint authority
+    pub fn initialize_sai_mint(ctx: Context<InitializeSaiMint>) -> Result<()> {
+        // Set mint authority to the PDA
         token::set_authority(
             CpiContext::new(
                 ctx.accounts.token_program.to_account_info(),
@@ -368,15 +372,38 @@ pub mod sai {
             Some(ctx.accounts.mint_authority.key()),
         )?;
 
-        // Initialize CDP state
+        Ok(())
+    }
+
+    pub fn initialize(ctx: Context<Initialize>, _collateral_ratio: u64) -> Result<()> {
         let cdp = &mut ctx.accounts.cdp;
-        cdp.collateral_type = "SOL".to_string(); // For now, we only support SOL as collateral
+        let clock = Clock::get()?;
+        
+        // Initialize CDP state
+        cdp.collateral_type = *b"SOL\0"; // Fixed size array for "SOL\0"
         cdp.collateral_amount = 0;
         cdp.sai_debt = 0;
-        cdp.created_at = Clock::get()?.unix_timestamp;
-        cdp.last_updated_at = Clock::get()?.unix_timestamp;
+        cdp.created_at = clock.unix_timestamp;
+        cdp.last_updated_at = clock.unix_timestamp;
         cdp.owner = ctx.accounts.payer.key();
         cdp.status = CdpStatus::Active;
+
+        // Set mint authority using PDA's authority
+        let mint_auth_seeds = &[b"mint_authority".as_ref(), &[*ctx.bumps.get("mint_authority").unwrap()]];
+        let mint_auth_signer = &[&mint_auth_seeds[..]];
+
+        token::set_authority(
+            CpiContext::new_with_signer(
+                ctx.accounts.token_program.to_account_info(),
+                token::SetAuthority {
+                    account_or_mint: ctx.accounts.sai_mint.to_account_info(),
+                    current_authority: ctx.accounts.mint_authority.to_account_info(),
+                },
+                mint_auth_signer,
+            ),
+            AuthorityType::MintTokens,
+            Some(ctx.accounts.mint_authority.key()),
+        )?;
 
         Ok(())
     }
@@ -514,20 +541,23 @@ pub struct CDP {
     pub owner: Pubkey,
     pub collateral_amount: u64,
     pub sai_debt: u64,
-    pub collateral_type: String,
+    pub collateral_type: [u8; 4], // Fixed size array for "SOL\0"
     pub created_at: i64,
     pub last_updated_at: i64,
     pub status: CdpStatus,
 }
 
 impl CDP {
-    pub const LEN: usize = 32 + // owner
-                          8 + // collateral_amount
-                          8 + // sai_debt
-                          36 + // collateral_type (max 32 chars + 4 bytes for length)
-                          8 + // created_at
-                          8 + // last_updated_at
-                          1; // status
+    pub const LEN: usize = 8 + // discriminator
+                          32 + // owner (Pubkey)
+                          8 + // collateral_amount (u64)
+                          8 + // sai_debt (u64)
+                          4 + // collateral_type ([u8; 4])
+                          4 + // padding for alignment
+                          8 + // created_at (i64)
+                          8 + // last_updated_at (i64)
+                          1 + // status (CdpStatus enum - 1 byte for variant)
+                          7; // padding for alignment to 8-byte boundary
 }
 
 // Contexts
@@ -540,8 +570,23 @@ pub struct InitializeCdp<'info> {
     #[account(
         init,
         payer = owner,
-        space = 8 + std::mem::size_of::<CDP>()
+        space = CDP::LEN,
+        seeds = [b"cdp", owner.key().as_ref()],
+        bump,
     )]
+    pub cdp: Account<'info, CDP>,
+    
+    pub system_program: Program<'info, System>,
+    pub rent: Sysvar<'info, Rent>,
+    pub token_program: Program<'info, Token>,
+}
+
+#[derive(Accounts)]
+pub struct InitializeVault<'info> {
+    #[account(mut)]
+    pub owner: Signer<'info>,
+    
+    #[account(mut)]
     pub cdp: Account<'info, CDP>,
     
     #[account(mut)]
@@ -736,14 +781,19 @@ pub struct LiquidateCDP<'info> {
 #[derive(Accounts)]
 pub struct InitializeSaiMint<'info> {
     #[account(
-        init,
-        payer = payer,
-        mint::decimals = 6,
-        mint::authority = payer.key(),
+        mut,
+        constraint = sai_mint.decimals == 6,
+        constraint = sai_mint.mint_authority.unwrap() == payer.key(),
     )]
     pub sai_mint: Account<'info, Mint>,
     #[account(mut)]
     pub payer: Signer<'info>,
+    /// CHECK: This is the PDA that will be the mint authority
+    #[account(
+        seeds = [b"mint_authority"],
+        bump
+    )]
+    pub mint_authority: UncheckedAccount<'info>,
     pub system_program: Program<'info, System>,
     pub token_program: Program<'info, Token>,
     pub rent: Sysvar<'info, Rent>,
@@ -754,11 +804,15 @@ pub struct Initialize<'info> {
     #[account(
         init,
         payer = payer,
-        space = 8 + CDP::LEN,
-        seeds = [b"cdp"],
+        space = CDP::LEN,
+        seeds = [b"cdp", payer.key().as_ref()],
         bump
     )]
     pub cdp: Account<'info, CDP>,
+    #[account(
+        mut,
+        constraint = sai_mint.decimals == 6,
+    )]
     pub sai_mint: Account<'info, Mint>,
     /// CHECK: This is safe because we're just using it as a PDA for signing
     #[account(

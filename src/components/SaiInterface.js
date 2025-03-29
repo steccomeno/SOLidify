@@ -15,14 +15,22 @@ import {
     getCollateralPrice,
     checkVaultLiquidationRisk,
     getAllActiveLiquidations,
-    initializeAPI
+    initializeAPI,
+    isAPIInitialized
 } from '../api/index';
 import LiquidationRiskIndicator from './LiquidationRiskIndicator';
 import './SaiInterface.css';
+require('@solana/wallet-adapter-react-ui/styles.css');
 
-const SaiInterface = ({ walletConnected, walletAddress }) => {
+const SaiInterface = () => {
+    const { connected, publicKey, wallet } = useWallet();
+    const { setVisible } = useWalletModal();
+    const [cdps, setCdps] = useState([]);
     const [loading, setLoading] = useState(false);
-    const [userCDPs, setUserCDPs] = useState([]);
+    const [error, setError] = useState(null);
+    const [collateralAmount, setCollateralAmount] = useState('');
+    const [saiAmount, setSaiAmount] = useState('');
+    const [isCreating, setIsCreating] = useState(false);
     const [selectedCDP, setSelectedCDP] = useState(null);
     const [cdpDetails, setCdpDetails] = useState(null);
     const [view, setView] = useState('list'); // 'list', 'create', 'detail'
@@ -45,13 +53,42 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
     const [showLiquidations, setShowLiquidations] = useState(false);
 
     useEffect(() => {
-        if (walletConnected && walletAddress) {
-            initializeAPI(window.solana);
-            loadUserCDPs();
-            loadWalletData();
-            loadActiveLiquidations();
-        }
-    }, [walletConnected, walletAddress]);
+        const initializeWalletAndLoadData = async () => {
+            if (connected && wallet && publicKey) {
+                try {
+                    console.log('Initializing wallet connection:', {
+                        connected,
+                        hasWallet: !!wallet,
+                        hasPublicKey: !!publicKey,
+                        publicKeyStr: publicKey.toString()
+                    });
+
+                    // Clear any existing errors
+                    setError(null);
+
+                    // Initialize API if not already initialized
+                    if (!isAPIInitialized()) {
+                        console.log('Initializing API...');
+                        await initializeAPI(wallet);
+                    }
+
+                    // Load data only after API is initialized
+                    console.log('Loading user data...');
+                    await Promise.all([
+                        loadUserCDPs(),
+                        loadWalletData(),
+                        loadActiveLiquidations()
+                    ]);
+                    console.log('User data loaded successfully');
+                } catch (error) {
+                    console.error('Failed to initialize:', error);
+                    setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
+                }
+            }
+        };
+
+        initializeWalletAndLoadData();
+    }, [connected, wallet, publicKey]);
 
     useEffect(() => {
         if (selectedCDP) {
@@ -71,11 +108,12 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
             setLoading(true);
             const result = await getUserCDPs();
             if (result.success) {
-                setUserCDPs(result.data);
+                setCdps(result.data);
             } else {
-                console.error('Failed to load CDPs:', result.error);
+                setError(result.error || 'Failed to load CDPs');
             }
         } catch (error) {
+            setError('Failed to load CDPs');
             console.error('Error loading CDPs:', error);
         } finally {
             setLoading(false);
@@ -135,34 +173,69 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
         }
     };
 
-    const handleCreateCDP = async () => {
-        try {
-            setLoading(true);
-            const collateralAmount = parseFloat(createCollateral);
-            const saiAmount = parseFloat(createAmount);
+    const handleCreateCDP = async (e) => {
+        e.preventDefault();
+        
+        if (!connected || !wallet || !publicKey) {
+            setError('Please connect your wallet first');
+            return;
+        }
 
-            if (isNaN(collateralAmount) || isNaN(saiAmount)) {
-                throw new Error('Please enter valid amounts');
+        // Ensure API is initialized
+        if (!isAPIInitialized()) {
+            try {
+                console.log('Initializing API before creating CDP...');
+                await initializeAPI({
+                    ...wallet,
+                    publicKey: publicKey
+                });
+                console.log('API initialized successfully');
+            } catch (error) {
+                console.error('Failed to initialize API:', error);
+                setError('Failed to initialize wallet connection. Please try reconnecting your wallet.');
+                return;
             }
+        }
 
-            const result = await createCDP(
-                collateralAmount * 1e9, // Convert to lamports
-                saiAmount * 1e9 // Convert to smallest unit
-            );
+        if (!collateralAmount || !saiAmount) {
+            setError('Please enter both collateral and SAI amounts');
+            return;
+        }
+
+        const collateral = parseFloat(collateralAmount);
+        const sai = parseFloat(saiAmount);
+
+        if (isNaN(collateral) || isNaN(sai)) {
+            setError('Please enter valid numbers');
+            return;
+        }
+
+        if (collateral <= 0 || sai <= 0) {
+            setError('Amounts must be greater than 0');
+            return;
+        }
+
+        try {
+            setIsCreating(true);
+            setError(null);
+            
+            console.log('Creating CDP with:', { collateral, sai });
+            const result = await createCDP(collateral, sai);
+            console.log('CDP creation result:', result);
 
             if (result.success) {
+                setCollateralAmount('');
+                setSaiAmount('');
                 setView('list');
-                loadUserCDPs();
-                setCreateAmount('');
-                setCreateCollateral('');
+                await loadUserCDPs();
             } else {
-                throw new Error(result.error);
+                setError(result.error || 'Failed to create CDP');
             }
         } catch (error) {
             console.error('Error creating CDP:', error);
-            alert(error.message);
+            setError(error.message || 'Failed to create CDP');
         } finally {
-            setLoading(false);
+            setIsCreating(false);
         }
     };
 
@@ -298,7 +371,7 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
                         </div>
                         <div className="stat-content">
                             <h3 className="stat-title">Active CDPs</h3>
-                            <div className="stat-value">{userCDPs.length}</div>
+                            <div className="stat-value">{cdps.length}</div>
                         </div>
                     </div>
                 </div>
@@ -312,14 +385,14 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
                     </button>
                 </div>
                 
-                {userCDPs.length === 0 ? (
+                {cdps.length === 0 ? (
                     <div className="empty-state">
                         <h3>No CDPs Found</h3>
                         <p>You don't have any active Collateralized Debt Positions. Create one to get started!</p>
                     </div>
                 ) : (
                     <div className="cdp-grid">
-                        {userCDPs.map((cdp) => (
+                        {cdps.map((cdp) => (
                             cdp && cdp.id ? (
                             <div 
                                 key={cdp.id} 
@@ -378,6 +451,26 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
     
     // Render the CDP creation form
     const renderCreateCDPForm = () => {
+        if (!connected) {
+            return (
+                <div className="sai-section">
+                    <div className="section-header">
+                        <h2>Create New CDP</h2>
+                        <p className="section-description">
+                            Lock your collateral and generate SAI stablecoins
+                        </p>
+                    </div>
+                    
+                    <div className="card form-card">
+                        <div className="wallet-connect-prompt">
+                            <p>Please connect your wallet to create a CDP</p>
+                            <WalletMultiButton className="wallet-button" />
+                        </div>
+                    </div>
+                </div>
+            );
+        }
+
         return (
             <div className="sai-section">
                 <div className="section-header">
@@ -388,27 +481,21 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
                 </div>
                 
                 <div className="card form-card">
-                    <form onSubmit={handleCreateCDP}>
-                        <div className="form-group">
-                            <label htmlFor="collateralType">Collateral Type</label>
-                            <select 
-                                id="collateralType"
-                                value={collateralType}
-                                onChange={(e) => setCollateralType(e.target.value)}
-                                required
-                            >
-                                <option value="SOL">SOL</option>
-                            </select>
+                    {error && (
+                        <div className="error-message">
+                            {error}
                         </div>
-                        
+                    )}
+                    
+                    <form onSubmit={handleCreateCDP}>
                         <div className="form-group">
                             <label htmlFor="collateralAmount">Collateral Amount</label>
                             <div className="input-with-suffix">
                                 <input 
                                     type="number" 
                                     id="collateralAmount"
-                                    value={createCollateral}
-                                    onChange={(e) => setCreateCollateral(e.target.value)}
+                                    value={collateralAmount}
+                                    onChange={(e) => setCollateralAmount(e.target.value)}
                                     placeholder="0.0"
                                     step="0.01"
                                     min="0.05"
@@ -427,40 +514,16 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
                                 <input 
                                     type="number" 
                                     id="saiAmount"
-                                    value={createAmount}
-                                    onChange={(e) => setCreateAmount(e.target.value)}
+                                    value={saiAmount}
+                                    onChange={(e) => setSaiAmount(e.target.value)}
                                     placeholder="0.0"
                                     step="0.01"
-                                    min="1"
+                                    min="0.01"
                                     required
                                 />
                                 <span className="suffix">SAI</span>
                             </div>
                         </div>
-                        
-                        {parseFloat(createCollateral) > 0 && parseFloat(createAmount) > 0 && (
-                            <div className="preview-box">
-                                <h4>Preview</h4>
-                                <div className="preview-stats">
-                                    <div className="preview-stat">
-                                        <span className="label">Collateralization Ratio</span>
-                                        <span className="value">
-                                            {Math.floor((parseFloat(createCollateral) * 15) / parseFloat(createAmount))}%
-                                        </span>
-                                    </div>
-                                    <div className="preview-stat">
-                                        <span className="label">Liquidation Price</span>
-                                        <span className="value">
-                                            ${(parseFloat(createAmount) * 10 / parseFloat(createCollateral) / 15).toFixed(2)}
-                                        </span>
-                                    </div>
-                                    <div className="preview-stat">
-                                        <span className="label">Stability Fee</span>
-                                        <span className="value">2.5%</span>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
                         
                         <div className="form-actions">
                             <button 
@@ -473,9 +536,9 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
                             <button 
                                 type="submit" 
                                 className="button primary-button"
-                                disabled={loading}
+                                disabled={isCreating || !connected}
                             >
-                                {loading ? 'Creating...' : 'Create CDP'}
+                                {isCreating ? 'Creating...' : 'Create CDP'}
                             </button>
                         </div>
                     </form>
@@ -753,44 +816,50 @@ const SaiInterface = ({ walletConnected, walletAddress }) => {
     // Main render function
     return (
         <div className="sai-interface">
-            {!walletConnected ? (
-                <div className="connect-wallet-prompt">
-                    <h2>Connect Your Wallet</h2>
-                    <p>Please connect your Phantom wallet to create and manage CDPs.</p>
-                </div>
-            ) : (
-                <div className="sai-content">
-                    <div className="sai-header">
-                        <h2>CDP Management</h2>
-                        <div className="wallet-info">
-                            <span>Connected: {walletAddress.slice(0, 4)}...{walletAddress.slice(-4)}</span>
-                            <span>SOL Balance: {walletBalance.sol}</span>
-                            <span>SAI Balance: {walletBalance.sai}</span>
-                        </div>
+            <div className="sai-content">
+                <div className="sai-header">
+                    <h2>CDP Management</h2>
+                    <div className="wallet-info">
+                        {connected ? (
+                            <>
+                                <span>Connected: {publicKey.toString().slice(0, 4)}...{publicKey.toString().slice(-4)}</span>
+                                <span>SOL Balance: {walletBalance.sol}</span>
+                                <span>SAI Balance: {walletBalance.sai}</span>
+                            </>
+                        ) : (
+                            <WalletMultiButton className="wallet-button" />
+                        )}
                     </div>
-
-                    <div className="sai-navigation">
-                        <button 
-                            className={`nav-button ${view === 'list' ? 'active' : ''}`}
-                            onClick={() => setView('list')}
-                        >
-                            My CDPs
-                        </button>
-                        <button 
-                            className={`nav-button ${view === 'create' ? 'active' : ''}`}
-                            onClick={() => setView('create')}
-                        >
-                            Create CDP
-                        </button>
-                    </div>
-
-                    {loading && <div className="loading">Loading...</div>}
-
-                    {view === 'list' && renderCDPList()}
-                    {view === 'create' && renderCreateCDPForm()}
-                    {view === 'detail' && renderCDPDetail()}
                 </div>
-            )}
+
+                <div className="sai-navigation">
+                    <button 
+                        className={`nav-button ${view === 'list' ? 'active' : ''}`}
+                        onClick={() => setView('list')}
+                    >
+                        My CDPs
+                    </button>
+                    <button 
+                        className={`nav-button ${view === 'create' ? 'active' : ''}`}
+                        onClick={() => setView('create')}
+                    >
+                        Create CDP
+                    </button>
+                </div>
+
+                {loading ? (
+                    <div className="loading-container">
+                        <div className="loading-spinner"></div>
+                        <p>Loading...</p>
+                    </div>
+                ) : (
+                    <>
+                        {view === 'list' && renderCDPList()}
+                        {view === 'create' && renderCreateCDPForm()}
+                        {view === 'detail' && renderCDPDetail()}
+                    </>
+                )}
+            </div>
         </div>
     );
 };

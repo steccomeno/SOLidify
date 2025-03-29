@@ -22,8 +22,40 @@ export const connectWallet = async () => {
     }
 };
 
+export const isAPIInitialized = () => {
+    return solanaAPI !== null;
+};
+
 export const initializeAPI = (wallet) => {
-    solanaAPI = new SolanaAPI(connection, wallet);
+    try {
+        console.log('Attempting to initialize API with wallet:', {
+            hasWallet: !!wallet,
+            connected: wallet?.connected,
+            hasPublicKey: !!wallet?.publicKey,
+            publicKeyStr: wallet?.publicKey?.toString(),
+            hasSignTransaction: !!wallet?.signTransaction
+        });
+
+        if (!wallet || !wallet.connected) {
+            throw new Error('Wallet is not connected');
+        }
+
+        if (!wallet.publicKey) {
+            throw new Error('Wallet public key is not available');
+        }
+
+        if (!wallet.signTransaction || typeof wallet.signTransaction !== 'function') {
+            throw new Error('Wallet signTransaction function is not available');
+        }
+
+        solanaAPI = new SolanaAPI(connection, wallet);
+        console.log('SolanaAPI instance created successfully');
+        return true;
+    } catch (error) {
+        console.error('Failed to initialize API:', error);
+        solanaAPI = null;
+        throw error;
+    }
 };
 
 export const createCDP = async (collateralAmount, saiAmount) => {

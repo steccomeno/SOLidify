@@ -1,7 +1,7 @@
 .sai-interface {
+  padding: 2rem;
   max-width: 1200px;
   margin: 0 auto;
-  padding: 2rem;
 }
 
 .connect-wallet-prompt {
@@ -22,9 +22,9 @@
 }
 
 .sai-content {
-  background-color: white;
-  border-radius: 0.5rem;
-  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.1);
+  background: var(--bg-primary);
+  border-radius: var(--border-radius-lg);
+  box-shadow: var(--shadow-sm);
   padding: 2rem;
 }
 
@@ -32,8 +32,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  margin-bottom: 2rem;
-  padding-bottom: 1rem;
+  padding: 1.5rem 2rem;
   border-bottom: 1px solid var(--border-color);
 }
 
@@ -45,9 +44,13 @@
 
 .wallet-info {
   display: flex;
+  align-items: center;
   gap: 1.5rem;
-  color: #64748b;
   font-size: 0.875rem;
+}
+
+.wallet-info span {
+  color: var(--text-secondary);
 }
 
 .sai-navigation {
@@ -272,4 +275,63 @@
   .action-buttons {
     grid-template-columns: 1fr;
   }
+}
+
+.wallet-connect-prompt {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 3rem;
+  text-align: center;
+  gap: 1.5rem;
+}
+
+.wallet-connect-prompt p {
+  color: var(--text-secondary);
+  font-size: 1rem;
+  margin: 0;
+}
+
+.wallet-button {
+  background: var(--primary-color) !important;
+  color: white !important;
+  border: none !important;
+  border-radius: 0.5rem !important;
+  padding: 0.75rem 1.5rem !important;
+  font-size: 1rem !important;
+  font-weight: 500 !important;
+  cursor: pointer !important;
+  transition: background-color 0.2s !important;
+}
+
+.wallet-button:hover {
+  background: var(--secondary-color) !important;
+}
+
+.loading-container {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 4rem;
+}
+
+.loading-spinner {
+  width: 40px;
+  height: 40px;
+  border: 3px solid var(--border-color);
+  border-top: 3px solid var(--primary-color);
+  border-radius: 50%;
+  animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+  0% { transform: rotate(0deg); }
+  100% { transform: rotate(360deg); }
+}
+
+.loading-container p {
+  margin-top: 1rem;
+  color: var(--text-secondary);
 } 

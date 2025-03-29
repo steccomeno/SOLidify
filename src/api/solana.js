@@ -19,6 +19,10 @@ export class SolanaAPI {
 
     async createCDP(collateralAmount, saiAmount) {
         try {
+            if (!this.wallet || !this.wallet.publicKey) {
+                throw new Error('Wallet not connected');
+            }
+
             const [cdp] = await PublicKey.findProgramAddress(
                 [Buffer.from('cdp'), this.wallet.publicKey.toBuffer()],
                 PROGRAM_ID

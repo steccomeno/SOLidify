@@ -9,10 +9,13 @@ import { useWallet as useWalletAdapter } from '@solana/wallet-adapter-react';
 
 // Constants
 const NETWORK = WalletAdapterNetwork.Devnet; // Use Devnet for development
-const RPC_ENDPOINT = process.env.REACT_APP_SOLANA_RPC_HOST || 'http://localhost:8899';
+const RPC_ENDPOINT = process.env.REACT_APP_SOLANA_RPC_HOST || clusterApiUrl(NETWORK);
 
 // Create a connection to the Solana cluster
-export const connection = new Connection(RPC_ENDPOINT);
+export const connection = new Connection(RPC_ENDPOINT, {
+    commitment: 'confirmed',
+    confirmTransactionInitialTimeout: 60000
+});
 
 // Standalone wallet utility functions
 export const isWalletConnected = (wallet) => {

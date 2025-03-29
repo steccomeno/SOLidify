@@ -8,7 +8,7 @@ const path = require('path');
 const saiIdl = require('../idl/sai.json');
 
 // Program IDs
-const SAI_PROGRAM_ID = new PublicKey("SAi111111111111111111111111111111111111111");
+const SAI_PROGRAM_ID = new PublicKey("GCbezKCTeHfYc6Z92sQ9ECW29XWDyo6WWmB1Dx74tisB");
 
 async function main() {
     console.log("Starting CDP creation test...");

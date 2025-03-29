@@ -23,22 +23,12 @@ describe('sai', () => {
   let mintAuthorityBump: number;
 
   before(async () => {
-    // Create a new keypair for testing
-    adminKeypair = Keypair.generate();
-
-    // Airdrop SOL to the admin
-    const signature = await provider.connection.requestAirdrop(
-      adminKeypair.publicKey,
-      2 * anchor.web3.LAMPORTS_PER_SOL
-    );
-    await provider.connection.confirmTransaction(signature);
-
-    // Find PDAs
-    [vaultAuthority] = await PublicKey.findProgramAddress(
-      [Buffer.from("vault_authority")],
-      programId
+    // Use existing admin keypair
+    adminKeypair = Keypair.fromSecretKey(
+      Buffer.from(JSON.parse(require('fs').readFileSync('./admin_keypair.json', 'utf-8')))
     );
 
+    // No need to airdrop since we already have SOL
     // Find mint authority PDA
     const mintAuthoritySeeds = [Buffer.from("mint_authority")];
     const mintAuthorityPDA = await PublicKey.findProgramAddress(
@@ -49,23 +39,13 @@ describe('sai', () => {
     mintAuthorityBump = mintAuthorityPDA[1];
 
     // Create SAI mint
-    const saiMintKeypair = Keypair.generate();
-    
-    // Initialize the SAI mint
-    await program.methods
-      .initializeSaiMint()
-      .accounts({
-        admin: adminKeypair.publicKey,
-        saiMint: saiMintKeypair.publicKey,
-        mintAuthority,
-        tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        rent: SYSVAR_RENT_PUBKEY,
-      })
-      .signers([adminKeypair, saiMintKeypair])
-      .rpc();
-      
-    saiMint = saiMintKeypair.publicKey;
+    saiMint = await createMint(
+      provider.connection,
+      adminKeypair,
+      mintAuthority,
+      null,
+      6 // 6 decimals for SAI
+    );
 
     // Create mock collateral mint
     mockCollateralMint = await createMint(
@@ -113,45 +93,71 @@ describe('sai', () => {
   });
 
   it('Creates a CDP, draws SAI, and repays', async () => {
-    // Generate a keypair for the CDP
-    const cdpKeypair = Keypair.generate();
-    
-    // Find the vault PDA
-    const [vault] = await PublicKey.findProgramAddress(
-      [Buffer.from("vault"), cdpKeypair.publicKey.toBuffer()],
+    // Find the CDP PDA
+    const [cdp] = await PublicKey.findProgramAddress(
+      [Buffer.from("cdp"), adminKeypair.publicKey.toBuffer()],
       programId
     );
     
-    // Create a new CDP
-    const collateralAmount = new anchor.BN(2 * 1_000_000_000); // 2 tokens
-    const saiAmount = new anchor.BN(100 * 1_000_000); // 100 SAI (with 6 decimals)
-    
+    // Initialize the CDP
     await program.methods
-      .initializeCdp(collateralAmount, saiAmount)
+      .initializeCdp()
       .accounts({
         owner: adminKeypair.publicKey,
-        cdp: cdpKeypair.publicKey,
+        cdp,
+        systemProgram: SystemProgram.programId,
+        rent: SYSVAR_RENT_PUBKEY,
+      })
+      .signers([adminKeypair])
+      .rpc();
+    
+    // Find the vault PDA
+    const [vault] = await PublicKey.findProgramAddress(
+      [Buffer.from("vault"), cdp.toBuffer()],
+      programId
+    );
+
+    // Find the vault authority PDA
+    const [vaultAuthority] = await PublicKey.findProgramAddress(
+      [Buffer.from("vault_authority"), cdp.toBuffer()],
+      programId
+    );
+    
+    // Initialize the vault and deposit collateral
+    const collateralAmount = new anchor.BN(2 * 1_000_000_000); // 2 tokens
+    await program.methods
+      .addCollateral(collateralAmount)
+      .accounts({
+        owner: adminKeypair.publicKey,
+        cdp,
         ownerCollateral: adminCollateralAccount,
-        collateralMint: mockCollateralMint,
         vault,
-        vaultAuthority,
+        tokenProgram: TOKEN_PROGRAM_ID,
+      })
+      .signers([adminKeypair])
+      .rpc();
+
+    const saiAmount = new anchor.BN(100 * 1_000_000); // 100 SAI (with 6 decimals)
+    await program.methods
+      .drawSai(saiAmount)
+      .accounts({
+        owner: adminKeypair.publicKey,
+        cdp,
+        vault,
         saiMint,
         ownerSai: adminSaiAccount,
         mintAuthority,
         tokenProgram: TOKEN_PROGRAM_ID,
-        systemProgram: SystemProgram.programId,
-        rent: SYSVAR_RENT_PUBKEY,
       })
-      .signers([adminKeypair, cdpKeypair])
+      .signers([adminKeypair])
       .rpc();
       
     // Verify CDP was created with correct data
-    const cdpAccount = await program.account.cdp.fetch(cdpKeypair.publicKey);
+    const cdpAccount = await program.account.cdp.fetch(cdp);
     assert.equal(cdpAccount.owner.toString(), adminKeypair.publicKey.toString());
     assert.equal(cdpAccount.collateralAmount.toNumber(), collateralAmount.toNumber());
     assert.equal(cdpAccount.saiDebt.toNumber(), saiAmount.toNumber());
-    assert.equal(cdpAccount.collateralType.toString(), mockCollateralMint.toString());
-    assert.equal(cdpAccount.liquidated, false);
+    assert.equal(cdpAccount.status.toString(), 'Active');
     
     // Draw more SAI
     const drawAmount = new anchor.BN(50 * 1_000_000); // 50 more SAI
@@ -160,7 +166,7 @@ describe('sai', () => {
       .drawSai(drawAmount)
       .accounts({
         owner: adminKeypair.publicKey,
-        cdp: cdpKeypair.publicKey,
+        cdp,
         vault,
         saiMint,
         ownerSai: adminSaiAccount,
@@ -171,7 +177,7 @@ describe('sai', () => {
       .rpc();
       
     // Verify CDP was updated
-    const updatedCdp = await program.account.cdp.fetch(cdpKeypair.publicKey);
+    const updatedCdp = await program.account.cdp.fetch(cdp);
     assert.equal(updatedCdp.saiDebt.toNumber(), saiAmount.add(drawAmount).toNumber());
     
     // Repay SAI
@@ -181,7 +187,7 @@ describe('sai', () => {
       .repaySai(repayAmount)
       .accounts({
         owner: adminKeypair.publicKey,
-        cdp: cdpKeypair.publicKey,
+        cdp,
         saiMint,
         ownerSai: adminSaiAccount,
         tokenProgram: TOKEN_PROGRAM_ID,
@@ -190,7 +196,7 @@ describe('sai', () => {
       .rpc();
       
     // Verify CDP was updated again
-    const finalCdp = await program.account.cdp.fetch(cdpKeypair.publicKey);
+    const finalCdp = await program.account.cdp.fetch(cdp);
     assert.equal(finalCdp.saiDebt.toNumber(), updatedCdp.saiDebt.sub(repayAmount).toNumber());
   });
 }); 

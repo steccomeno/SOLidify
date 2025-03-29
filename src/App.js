@@ -8,14 +8,20 @@ import LiquidationDashboard from './pages/LiquidationDashboard';
 import LaunchScreen from './components/LaunchScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import LoadingSpinner from './components/LoadingSpinner';
-import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
+import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import { clusterApiUrl } from '@solana/web3.js';
-import { useWallet } from './utils/walletUtils';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
+import { initializeAPI } from './api';
 
-// Initialize wallet adapters
+// Import wallet adapter CSS
+require('@solana/wallet-adapter-react-ui/styles.css');
+
+// Set up network and wallet adapters
 const network = WalletAdapterNetwork.Devnet;
 const endpoint = clusterApiUrl(network);
 const wallets = [new PhantomWalletAdapter()];
@@ -23,9 +29,9 @@ const wallets = [new PhantomWalletAdapter()];
 function AppContent() {
   const [activeTab, setActiveTab] = useState('home');
   const [showLaunchScreen, setShowLaunchScreen] = useState(true);
-  const { connected, publicKey, connect, disconnect } = useWallet();
-  const [isConnecting, setIsConnecting] = useState(false);
-  const [error, setError] = useState(null);
+  const { connected, publicKey, wallet, select, wallets } = useWallet();
+  const location = useLocation();
+  const [apiInitialized, setApiInitialized] = useState(false);
 
   useEffect(() => {
     // Check if we've already launched the app before (using localStorage)
@@ -35,38 +41,42 @@ function AppContent() {
     }
   }, []);
 
+  useEffect(() => {
+    const initializeWallet = async () => {
+      if (connected && wallet && publicKey) {
+        try {
+          console.log('Initializing API with wallet:', {
+            connected,
+            hasPublicKey: !!publicKey,
+            publicKey: publicKey.toString(),
+            hasWallet: !!wallet,
+            hasAdapter: !!wallet.adapter
+          });
+
+          // Initialize the API with the wallet
+          initializeAPI(wallet);
+          setApiInitialized(true);
+        } catch (error) {
+          console.error('Failed to initialize API:', error);
+          setApiInitialized(false);
+        }
+      } else {
+        console.log('Wallet not ready:', {
+          connected,
+          hasWallet: !!wallet,
+          hasPublicKey: !!publicKey
+        });
+        setApiInitialized(false);
+      }
+    };
+
+    initializeWallet();
+  }, [connected, wallet, publicKey]);
+
   // Function to handle navigation from landing page to app sections
   const navigateToApp = (tab) => {
     setActiveTab(tab);
     window.scrollTo(0, 0);
-  };
-
-  // Handle wallet connection
-  const handleConnectWallet = async () => {
-    if (connected) {
-      try {
-        await disconnect();
-      } catch (error) {
-        setError('Failed to disconnect wallet. Please try again.');
-      }
-      return;
-    }
-    
-    setIsConnecting(true);
-    setError(null);
-    
-    try {
-      const result = await connect();
-      
-      if (!result.success) {
-        setError(result.message || 'Failed to connect wallet. Please try again.');
-      }
-    } catch (error) {
-      setError('Failed to connect wallet. Please try again.');
-      console.error("Failed to connect wallet:", error);
-    } finally {
-      setIsConnecting(false);
-    }
   };
 
   // Format wallet address for display
@@ -76,25 +86,15 @@ function AppContent() {
     return `${address.slice(0, 4)}...${address.slice(-4)}`;
   };
 
-  const handleLaunch = () => {
-    setShowLaunchScreen(false);
-    localStorage.setItem('solidify_launched', 'true');
-    window.history.pushState({}, '', '/');
-  };
-
-  // If someone wants to directly access a page, override the launch screen
-  useEffect(() => {
-    if (window.location.pathname !== '/' && showLaunchScreen) {
-      setShowLaunchScreen(false);
-      localStorage.setItem('solidify_launched', 'true');
-    }
-  }, [showLaunchScreen]);
-
   return (
     <ErrorBoundary>
       <div className="app">
         {showLaunchScreen ? (
-          <LaunchScreen onLaunch={handleLaunch} />
+          <LaunchScreen onLaunch={() => {
+            setShowLaunchScreen(false);
+            localStorage.setItem('solidify_launched', 'true');
+            window.history.pushState({}, '', '/');
+          }} />
         ) : (
           <>
             <header className="app-header">
@@ -104,76 +104,33 @@ function AppContent() {
               <nav className="main-nav">
                 <ul>
                   <li>
-                    <Link to="/">Home</Link>
+                    <Link to="/" className={location.pathname === '/' ? 'active' : ''}>Home</Link>
                   </li>
                   <li>
-                    <Link to="/vaults">Vaults</Link>
+                    <Link to="/vaults" className={location.pathname === '/vaults' ? 'active' : ''}>Vaults</Link>
                   </li>
                   <li>
-                    <Link to="/liquidations">Liquidations</Link>
+                    <Link to="/liquidations" className={location.pathname === '/liquidations' ? 'active' : ''}>Liquidations</Link>
                   </li>
                   <li>
-                    <Link to="/governance">Governance</Link>
+                    <Link to="/governance" className={location.pathname === '/governance' ? 'active' : ''}>Governance</Link>
                   </li>
                 </ul>
               </nav>
               <div className="wallet-section">
-                {error && <div className="error-message">{error}</div>}
-                <button 
-                  className={`wallet-button ${connected ? 'connected' : ''} ${isConnecting ? 'connecting' : ''}`}
-                  onClick={handleConnectWallet}
-                  disabled={isConnecting}
-                >
-                  {isConnecting ? (
-                    <LoadingSpinner size="small" message="Connecting..." />
-                  ) : connected ? (
-                    <>
-                      <span className="wallet-address">{formatWalletAddress(publicKey)}</span>
-                      <span className="wallet-status"></span>
-                    </>
-                  ) : (
-                    'Connect Wallet'
-                  )}
-                </button>
+                <WalletMultiButton />
               </div>
             </header>
             
-            <main className="app-content">
+            <main className="app-main">
               <Routes>
-                <Route path="/" element={<LandingPage onGetStarted={() => navigateToApp('sai')} />} />
+                <Route path="/" element={<LandingPage onNavigate={navigateToApp} />} />
                 <Route 
                   path="/vaults" 
-                  element={
-                    <ErrorBoundary>
-                      <SaiInterface 
-                        walletConnected={connected} 
-                        walletAddress={publicKey?.toString()} 
-                      />
-                    </ErrorBoundary>
-                  } 
+                  element={<SaiInterface />} 
                 />
-                <Route 
-                  path="/liquidations" 
-                  element={
-                    <ErrorBoundary>
-                      <LiquidationDashboard 
-                        walletConnected={connected} 
-                        walletAddress={publicKey?.toString()} 
-                      />
-                    </ErrorBoundary>
-                  } 
-                />
-                <Route 
-                  path="/governance" 
-                  element={
-                    <ErrorBoundary>
-                      <GovernanceInterface 
-                        walletConnected={connected} 
-                        walletAddress={publicKey?.toString()} 
-                      />
-                    </ErrorBoundary>
-                  } 
-                />
+                <Route path="/liquidations" element={<LiquidationDashboard />} />
+                <Route path="/governance" element={<GovernanceInterface />} />
               </Routes>
             </main>
             
@@ -202,9 +159,11 @@ function App() {
   return (
     <ConnectionProvider endpoint={endpoint}>
       <WalletProvider wallets={wallets} autoConnect>
-        <Router>
-          <AppContent />
-        </Router>
+        <WalletModalProvider>
+          <Router>
+            <AppContent />
+          </Router>
+        </WalletModalProvider>
       </WalletProvider>
     </ConnectionProvider>
   );
