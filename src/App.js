@@ -6,6 +6,8 @@ import GovernanceInterface from './components/GovernanceInterface';
 import LiquidationAuctionInterface from './components/LiquidationAuctionInterface';
 import LiquidationDashboard from './pages/LiquidationDashboard';
 import LaunchScreen from './components/LaunchScreen';
+import ErrorBoundary from './components/ErrorBoundary';
+import LoadingSpinner from './components/LoadingSpinner';
 import { BrowserRouter as Router, Routes, Route, Link } from 'react-router-dom';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
@@ -23,6 +25,7 @@ function AppContent() {
   const [showLaunchScreen, setShowLaunchScreen] = useState(true);
   const { connected, publicKey, connect, disconnect } = useWallet();
   const [isConnecting, setIsConnecting] = useState(false);
+  const [error, setError] = useState(null);
 
   useEffect(() => {
     // Check if we've already launched the app before (using localStorage)
@@ -41,21 +44,25 @@ function AppContent() {
   // Handle wallet connection
   const handleConnectWallet = async () => {
     if (connected) {
-      // Disconnect wallet
-      disconnect();
+      try {
+        await disconnect();
+      } catch (error) {
+        setError('Failed to disconnect wallet. Please try again.');
+      }
       return;
     }
     
     setIsConnecting(true);
+    setError(null);
     
     try {
-      // Connect wallet
       const result = await connect();
       
       if (!result.success) {
-        console.error("Failed to connect wallet:", result.message);
+        setError(result.message || 'Failed to connect wallet. Please try again.');
       }
     } catch (error) {
+      setError('Failed to connect wallet. Please try again.');
       console.error("Failed to connect wallet:", error);
     } finally {
       setIsConnecting(false);
@@ -71,9 +78,7 @@ function AppContent() {
 
   const handleLaunch = () => {
     setShowLaunchScreen(false);
-    // Store in localStorage that we've launched the app
     localStorage.setItem('solidify_launched', 'true');
-    // Ensure we start at the home route
     window.history.pushState({}, '', '/');
   };
 
@@ -86,75 +91,110 @@ function AppContent() {
   }, [showLaunchScreen]);
 
   return (
-    <div className="app">
-      {showLaunchScreen ? (
-        <LaunchScreen onLaunch={handleLaunch} />
-      ) : (
-        <>
-          <header className="app-header">
-            <div className="logo">
-              <Link to="/">SOLidify</Link>
-            </div>
-            <nav className="main-nav">
-              <ul>
-                <li>
-                  <Link to="/">Home</Link>
-                </li>
-                <li>
-                  <Link to="/vaults">Vaults</Link>
-                </li>
-                <li>
-                  <Link to="/liquidations">Liquidations</Link>
-                </li>
-                <li>
-                  <Link to="/governance">Governance</Link>
-                </li>
-              </ul>
-            </nav>
-            <button 
-              className={`wallet-button ${connected ? 'connected' : ''} ${isConnecting ? 'connecting' : ''}`}
-              onClick={handleConnectWallet}
-              disabled={isConnecting}
-            >
-              {isConnecting ? (
-                'Connecting...'
-              ) : connected ? (
-                <>
-                  <span className="wallet-address">{formatWalletAddress(publicKey)}</span>
-                  <span className="wallet-status"></span>
-                </>
-              ) : (
-                'Connect Wallet'
-              )}
-            </button>
-          </header>
-          
-          <main className="app-content">
-            <Routes>
-              <Route path="/" element={<LandingPage onGetStarted={() => navigateToApp('sai')} />} />
-              <Route path="/vaults" element={<SaiInterface walletConnected={connected} walletAddress={publicKey?.toString()} />} />
-              <Route path="/liquidations" element={<LiquidationDashboard walletConnected={connected} walletAddress={publicKey?.toString()} />} />
-              <Route path="/governance" element={<GovernanceInterface walletConnected={connected} walletAddress={publicKey?.toString()} />} />
-            </Routes>
-          </main>
-          
-          <footer className="app-footer">
-            <div className="footer-content">
-              <div className="footer-logo">SOLidify</div>
-              <div className="footer-links">
-                <a href="https://github.com/solidify-dao" target="_blank" rel="noopener noreferrer">GitHub</a>
-                <a href="#" target="_blank" rel="noopener noreferrer">Docs</a>
-                <a href="#" target="_blank" rel="noopener noreferrer">Terms</a>
-                <a href="#" target="_blank" rel="noopener noreferrer">Privacy</a>
+    <ErrorBoundary>
+      <div className="app">
+        {showLaunchScreen ? (
+          <LaunchScreen onLaunch={handleLaunch} />
+        ) : (
+          <>
+            <header className="app-header">
+              <div className="logo">
+                <Link to="/">SOLidify</Link>
               </div>
-            </div>
-            <div className="copyright">
-              © {new Date().getFullYear()} SOLidify. All rights reserved.
-            </div>
-          </footer>
-        </>
-      )}
-    </div>
+              <nav className="main-nav">
+                <ul>
+                  <li>
+                    <Link to="/">Home</Link>
+                  </li>
+                  <li>
+                    <Link to="/vaults">Vaults</Link>
+                  </li>
+                  <li>
+                    <Link to="/liquidations">Liquidations</Link>
+                  </li>
+                  <li>
+                    <Link to="/governance">Governance</Link>
+                  </li>
+                </ul>
+              </nav>
+              <div className="wallet-section">
+                {error && <div className="error-message">{error}</div>}
+                <button 
+                  className={`wallet-button ${connected ? 'connected' : ''} ${isConnecting ? 'connecting' : ''}`}
+                  onClick={handleConnectWallet}
+                  disabled={isConnecting}
+                >
+                  {isConnecting ? (
+                    <LoadingSpinner size="small" message="Connecting..." />
+                  ) : connected ? (
+                    <>
+                      <span className="wallet-address">{formatWalletAddress(publicKey)}</span>
+                      <span className="wallet-status"></span>
+                    </>
+                  ) : (
+                    'Connect Wallet'
+                  )}
+                </button>
+              </div>
+            </header>
+            
+            <main className="app-content">
+              <Routes>
+                <Route path="/" element={<LandingPage onGetStarted={() => navigateToApp('sai')} />} />
+                <Route 
+                  path="/vaults" 
+                  element={
+                    <ErrorBoundary>
+                      <SaiInterface 
+                        walletConnected={connected} 
+                        walletAddress={publicKey?.toString()} 
+                      />
+                    </ErrorBoundary>
+                  } 
+                />
+                <Route 
+                  path="/liquidations" 
+                  element={
+                    <ErrorBoundary>
+                      <LiquidationDashboard 
+                        walletConnected={connected} 
+                        walletAddress={publicKey?.toString()} 
+                      />
+                    </ErrorBoundary>
+                  } 
+                />
+                <Route 
+                  path="/governance" 
+                  element={
+                    <ErrorBoundary>
+                      <GovernanceInterface 
+                        walletConnected={connected} 
+                        walletAddress={publicKey?.toString()} 
+                      />
+                    </ErrorBoundary>
+                  } 
+                />
+              </Routes>
+            </main>
+            
+            <footer className="app-footer">
+              <div className="footer-content">
+                <div className="footer-logo">SOLidify</div>
+                <div className="footer-links">
+                  <a href="https://github.com/solidify-dao" target="_blank" rel="noopener noreferrer">GitHub</a>
+                  <a href="/docs" target="_blank" rel="noopener noreferrer">Docs</a>
+                  <a href="/terms" target="_blank" rel="noopener noreferrer">Terms</a>
+                  <a href="/privacy" target="_blank" rel="noopener noreferrer">Privacy</a>
+                </div>
+              </div>
+              <div className="copyright">
+                © {new Date().getFullYear()} SOLidify. All rights reserved.
+              </div>
+            </footer>
+          </>
+        )}
+      </div>
+    </ErrorBoundary>
   );
 }
 

@@ -128,7 +128,7 @@
         },
         {
           "name": "vault",
-          "isMut": false,
+          "isMut": true,
           "isSigner": false
         },
         {
@@ -271,20 +271,52 @@
           "type": "u64"
         }
       ]
+    },
+    {
+      "name": "closeCdp",
+      "accounts": [
+        {
+          "name": "owner",
+          "isMut": true,
+          "isSigner": true
+        },
+        {
+          "name": "cdp",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "ownerCollateral",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vault",
+          "isMut": true,
+          "isSigner": false
+        },
+        {
+          "name": "vaultAuthority",
+          "isMut": false,
+          "isSigner": false
+        },
+        {
+          "name": "tokenProgram",
+          "isMut": false,
+          "isSigner": false
+        }
+      ],
+      "args": []
     }
   ],
   "accounts": [
     {
-      "name": "CDP",
+      "name": "Cdp",
       "type": {
         "kind": "struct",
         "fields": [
           {
             "name": "owner",
-            "type": "publicKey"
-          },
-          {
-            "name": "collateralType",
             "type": "publicKey"
           },
           {
@@ -296,16 +328,29 @@
             "type": "u64"
           },
           {
-            "name": "createdAt",
-            "type": "i64"
+            "name": "status",
+            "type": {
+              "defined": "CdpStatus"
+            }
+          }
+        ]
+      }
+    }
+  ],
+  "types": [
+    {
+      "name": "CdpStatus",
+      "type": {
+        "kind": "enum",
+        "variants": [
+          {
+            "name": "Active"
           },
           {
-            "name": "lastUpdated",
-            "type": "i64"
+            "name": "Liquidated"
           },
           {
-            "name": "liquidated",
-            "type": "bool"
+            "name": "Closed"
           }
         ]
       }

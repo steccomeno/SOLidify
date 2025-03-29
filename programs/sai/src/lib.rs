@@ -1,7 +1,7 @@
 use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint, MintTo, Transfer, Burn};
 use anchor_lang::solana_program::system_instruction;
-use spl_token::instruction::AuthorityType;
+use anchor_spl::token::spl_token::instruction::AuthorityType;
 
 declare_id!("Cigtkftzwjx3pB2nCWiG85NPxhQvgF47qzEjpbkEdUsf");
 
@@ -561,8 +561,8 @@ pub struct InitializeCdp<'info> {
     
     /// CHECK: PDA used as token account authority
     #[account(
-        seeds = [b"vault_authority"],
-        bump,
+        seeds = [b"vault_authority", cdp.key().as_ref()],
+        bump
     )]
     pub vault_authority: AccountInfo<'info>,
     
@@ -579,7 +579,7 @@ pub struct InitializeCdp<'info> {
     /// CHECK: PDA used as mint authority
     #[account(
         seeds = [b"mint_authority"],
-        bump,
+        bump
     )]
     pub mint_authority: AccountInfo<'info>,
     
@@ -687,8 +687,8 @@ pub struct CloseCDP<'info> {
     
     /// CHECK: PDA used as token account authority
     #[account(
-        seeds = [b"vault_authority"],
-        bump,
+        seeds = [b"vault_authority", cdp.key().as_ref()],
+        bump
     )]
     pub vault_authority: AccountInfo<'info>,
     
@@ -725,8 +725,8 @@ pub struct LiquidateCDP<'info> {
     
     /// CHECK: PDA used as token account authority
     #[account(
-        seeds = [b"vault_authority"],
-        bump,
+        seeds = [b"vault_authority", cdp.key().as_ref()],
+        bump
     )]
     pub vault_authority: AccountInfo<'info>,
     

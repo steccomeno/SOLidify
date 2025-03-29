@@ -1,5 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { PublicKey } from '@solana/web3.js';
+import { useWallet } from '@solana/wallet-adapter-react';
+import { useWalletModal } from '@solana/wallet-adapter-react-ui';
+import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
 import { 
     createCDP, 
     addCollateral, 
@@ -8,26 +11,16 @@ import {
     closeCDP, 
     getUserCDPs,
     getCDPInfo,
-    connectWallet,
+    getWalletBalance,
     getCollateralPrice,
     checkVaultLiquidationRisk,
-    getAllActiveLiquidations
-} from '../api';
+    getAllActiveLiquidations,
+    initializeAPI
+} from '../api/index';
 import LiquidationRiskIndicator from './LiquidationRiskIndicator';
 import './SaiInterface.css';
 
-// Define getWalletBalance function since it's missing in the API
-const getWalletBalance = async () => {
-    // Mock wallet balance function
-    await new Promise(resolve => setTimeout(resolve, 800));
-    return {
-        sol: 2.45,
-        sai: 120.50,
-    };
-};
-
-const SaiInterface = () => {
-    const [walletConnected, setWalletConnected] = useState(false);
+const SaiInterface = ({ walletConnected, walletAddress }) => {
     const [loading, setLoading] = useState(false);
     const [userCDPs, setUserCDPs] = useState([]);
     const [selectedCDP, setSelectedCDP] = useState(null);
@@ -51,18 +44,14 @@ const SaiInterface = () => {
     const [activeLiquidations, setActiveLiquidations] = useState([]);
     const [showLiquidations, setShowLiquidations] = useState(false);
 
-    const SOL_MINT = new PublicKey('So11111111111111111111111111111111111111112'); // Native SOL mint
-    const USDC_MINT = new PublicKey('EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v'); // USDC Mint on devnet
-
     useEffect(() => {
-        checkIfWalletConnected();
-    }, []);
-    
-    useEffect(() => {
-        if (walletConnected) {
+        if (walletConnected && walletAddress) {
+            initializeAPI(window.solana);
             loadUserCDPs();
+            loadWalletData();
+            loadActiveLiquidations();
         }
-    }, [walletConnected]);
+    }, [walletConnected, walletAddress]);
 
     useEffect(() => {
         if (selectedCDP) {
@@ -71,75 +60,44 @@ const SaiInterface = () => {
     }, [selectedCDP]);
 
     useEffect(() => {
-        if (walletConnected) {
-            loadWalletData();
-        }
-    }, [walletConnected]);
-
-    useEffect(() => {
-        if (walletConnected) {
-            loadActiveLiquidations();
-        }
-    }, [walletConnected]);
-
-    useEffect(() => {
         if (cdpDetails && cdpDetails.collateralType) {
             loadCollateralPrice(cdpDetails.collateralType);
             checkLiquidationRisk();
         }
     }, [cdpDetails]);
 
-    const checkIfWalletConnected = async () => {
+    const loadUserCDPs = async () => {
         try {
-            const connected = await connectWallet();
-            setWalletConnected(connected);
+            setLoading(true);
+            const result = await getUserCDPs();
+            if (result.success) {
+                setUserCDPs(result.data);
+            } else {
+                console.error('Failed to load CDPs:', result.error);
+            }
         } catch (error) {
-            console.error("Failed to check wallet connection:", error);
-        }
-    };
-
-    const handleConnectWallet = async () => {
-        setLoading(true);
-        try {
-            const connected = await connectWallet();
-            setWalletConnected(connected);
-            } catch (error) {
-            console.error("Failed to connect wallet:", error);
+            console.error('Error loading CDPs:', error);
         } finally {
             setLoading(false);
         }
     };
-    
-    const loadUserCDPs = async () => {
-        try {
-            setLoading(true);
-            const cdps = await getUserCDPs();
-            console.log('CDPs loaded:', cdps);
-            setUserCDPs(cdps);
-            setLoading(false);
-        } catch (error) {
-            console.error('Error loading CDPs:', error);
-            setLoading(false);
-        }
-    };
-    
+
     const loadCDPDetails = async (cdpAddress) => {
         try {
             setLoading(true);
-            const details = await getCDPInfo(cdpAddress);
-            
-            // Determine collateral type based on mint address
-            const collateralType = details.collateralMint.toString() === SOL_MINT.toString() ? 'SOL' : 'USDC';
-            details.collateralType = collateralType;
-            
-            setCdpDetails(details);
-            setLoading(false);
+            const result = await getCDPInfo(cdpAddress);
+            if (result.success) {
+                setCdpDetails(result.data);
+            } else {
+                console.error('Failed to load CDP details:', result.error);
+            }
         } catch (error) {
             console.error('Error loading CDP details:', error);
+        } finally {
             setLoading(false);
         }
     };
-    
+
     const loadWalletData = async () => {
         try {
             const balance = await getWalletBalance();
@@ -148,113 +106,19 @@ const SaiInterface = () => {
             console.error('Error loading wallet data:', error);
         }
     };
-    
-    const handleCreateCDP = async (e) => {
-        e.preventDefault();
-        
-        if (!createCollateral || !createAmount) {
-                return;
-            }
-        
+
+    const loadActiveLiquidations = async () => {
         try {
-            setLoading(true);
-            await createCDP(parseFloat(createCollateral), parseFloat(createAmount));
-            setCreateCollateral('');
-            setCreateAmount('');
-            setView('list');
-            loadUserCDPs();
+            const liquidations = await getAllActiveLiquidations();
+            setActiveLiquidations(liquidations);
         } catch (error) {
-            console.error('Error creating CDP:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    const handleAddCollateral = async (e) => {
-        e.preventDefault();
-        
-        if (!actionAmount || !selectedCDP) {
-            return;
-        }
-        
-        try {
-            setLoading(true);
-            await addCollateral(selectedCDP, parseFloat(actionAmount));
-            setActionAmount('');
-            loadCDPDetails(selectedCDP);
-            loadUserCDPs();
-        } catch (error) {
-            console.error('Error adding collateral:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    const handleDrawSai = async (e) => {
-        e.preventDefault();
-        
-        if (!actionAmount || !selectedCDP) {
-                return;
-            }
-        
-        try {
-            setLoading(true);
-            await drawSai(selectedCDP, parseFloat(actionAmount));
-            setActionAmount('');
-            loadCDPDetails(selectedCDP);
-            loadUserCDPs();
-            loadWalletData();
-        } catch (error) {
-            console.error('Error drawing SAI:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    const handleRepaySai = async (e) => {
-        e.preventDefault();
-        
-        if (!actionAmount || !selectedCDP) {
-            return;
-        }
-        
-        try {
-            setLoading(true);
-            await repaySai(selectedCDP, parseFloat(actionAmount));
-            setActionAmount('');
-            loadCDPDetails(selectedCDP);
-            loadUserCDPs();
-            loadWalletData();
-        } catch (error) {
-            console.error('Error repaying SAI:', error);
-        } finally {
-            setLoading(false);
-        }
-    };
-    
-    const handleCloseCDP = async () => {
-        if (!selectedCDP) {
-                return;
-            }
-        
-        try {
-            setLoading(true);
-            await closeCDP(selectedCDP);
-            setCdpDetails(null);
-            setSelectedCDP(null);
-            setView('list');
-            loadUserCDPs();
-        } catch (error) {
-            console.error('Error closing CDP:', error);
-        } finally {
-            setLoading(false);
+            console.error('Error loading liquidations:', error);
         }
     };
 
-    // New functions for liquidation
-    const loadCollateralPrice = async (assetType) => {
+    const loadCollateralPrice = async (type) => {
         try {
-            const price = await getCollateralPrice(assetType);
+            const price = await getCollateralPrice(type);
             setCollateralPrice(price);
         } catch (error) {
             console.error('Error loading collateral price:', error);
@@ -263,7 +127,6 @@ const SaiInterface = () => {
 
     const checkLiquidationRisk = async () => {
         if (!selectedCDP) return;
-        
         try {
             const risk = await checkVaultLiquidationRisk(selectedCDP);
             setLiquidationRisk(risk);
@@ -272,18 +135,136 @@ const SaiInterface = () => {
         }
     };
 
-    const loadActiveLiquidations = async () => {
+    const handleCreateCDP = async () => {
         try {
-            const liquidations = await getAllActiveLiquidations();
-            setActiveLiquidations(liquidations);
+            setLoading(true);
+            const collateralAmount = parseFloat(createCollateral);
+            const saiAmount = parseFloat(createAmount);
+
+            if (isNaN(collateralAmount) || isNaN(saiAmount)) {
+                throw new Error('Please enter valid amounts');
+            }
+
+            const result = await createCDP(
+                collateralAmount * 1e9, // Convert to lamports
+                saiAmount * 1e9 // Convert to smallest unit
+            );
+
+            if (result.success) {
+                setView('list');
+                loadUserCDPs();
+                setCreateAmount('');
+                setCreateCollateral('');
+            } else {
+                throw new Error(result.error);
+            }
         } catch (error) {
-            console.error('Error loading active liquidations:', error);
+            console.error('Error creating CDP:', error);
+            alert(error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleAddCollateral = async () => {
+        try {
+            setLoading(true);
+            const amount = parseFloat(actionAmount);
+
+            if (isNaN(amount)) {
+                throw new Error('Please enter a valid amount');
+            }
+
+            const result = await addCollateral(selectedCDP, amount * 1e9);
+
+            if (result.success) {
+                loadCDPDetails(selectedCDP);
+                setActionAmount('');
+            } else {
+                throw new Error(result.error);
+            }
+        } catch (error) {
+            console.error('Error adding collateral:', error);
+            alert(error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleDrawSai = async () => {
+        try {
+            setLoading(true);
+            const amount = parseFloat(actionAmount);
+
+            if (isNaN(amount)) {
+                throw new Error('Please enter a valid amount');
+            }
+
+            const result = await drawSai(selectedCDP, amount * 1e9);
+
+            if (result.success) {
+                loadCDPDetails(selectedCDP);
+                setActionAmount('');
+            } else {
+                throw new Error(result.error);
+            }
+        } catch (error) {
+            console.error('Error drawing SAI:', error);
+            alert(error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleRepaySai = async () => {
+        try {
+            setLoading(true);
+            const amount = parseFloat(actionAmount);
+
+            if (isNaN(amount)) {
+                throw new Error('Please enter a valid amount');
+            }
+
+            const result = await repaySai(selectedCDP, amount * 1e9);
+
+            if (result.success) {
+                loadCDPDetails(selectedCDP);
+                setActionAmount('');
+            } else {
+                throw new Error(result.error);
+            }
+        } catch (error) {
+            console.error('Error repaying SAI:', error);
+            alert(error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleCloseCDP = async () => {
+        try {
+            setLoading(true);
+            const result = await closeCDP(selectedCDP);
+
+            if (result.success) {
+                setView('list');
+                loadUserCDPs();
+                setSelectedCDP(null);
+                setCdpDetails(null);
+            } else {
+                throw new Error(result.error);
+            }
+        } catch (error) {
+            console.error('Error closing CDP:', error);
+            alert(error.message);
+        } finally {
+            setLoading(false);
         }
     };
 
     // Render the CDP list view
     const renderCDPList = () => {
-    return (
+        return (
             <div className="sai-section">
                 <div className="section-header">
                     <h2>Your Collateralized Debt Positions</h2>
@@ -773,23 +754,42 @@ const SaiInterface = () => {
     return (
         <div className="sai-interface">
             {!walletConnected ? (
-                <div className="connect-prompt">
+                <div className="connect-wallet-prompt">
                     <h2>Connect Your Wallet</h2>
-                    <p>Connect your wallet to create and manage Collateralized Debt Positions.</p>
-                    <button 
-                        className="button primary-button"
-                        onClick={handleConnectWallet}
-                        disabled={loading}
-                    >
-                        {loading ? 'Connecting...' : 'Connect Wallet'}
-                    </button>
+                    <p>Please connect your Phantom wallet to create and manage CDPs.</p>
                 </div>
             ) : (
-                <>
+                <div className="sai-content">
+                    <div className="sai-header">
+                        <h2>CDP Management</h2>
+                        <div className="wallet-info">
+                            <span>Connected: {walletAddress.slice(0, 4)}...{walletAddress.slice(-4)}</span>
+                            <span>SOL Balance: {walletBalance.sol}</span>
+                            <span>SAI Balance: {walletBalance.sai}</span>
+                        </div>
+                    </div>
+
+                    <div className="sai-navigation">
+                        <button 
+                            className={`nav-button ${view === 'list' ? 'active' : ''}`}
+                            onClick={() => setView('list')}
+                        >
+                            My CDPs
+                        </button>
+                        <button 
+                            className={`nav-button ${view === 'create' ? 'active' : ''}`}
+                            onClick={() => setView('create')}
+                        >
+                            Create CDP
+                        </button>
+                    </div>
+
+                    {loading && <div className="loading">Loading...</div>}
+
                     {view === 'list' && renderCDPList()}
                     {view === 'create' && renderCreateCDPForm()}
                     {view === 'detail' && renderCDPDetail()}
-                </>
+                </div>
             )}
         </div>
     );

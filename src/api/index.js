@@ -1,144 +1,123 @@
-// Mock API for SOLidify demo
-import { mockProposals } from './mockProposals';
+import { SolanaAPI } from './solana';
+import { connection } from '../utils/walletUtils';
 
-// Simulate network delay
-const delay = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+let solanaAPI = null;
 
-// Mock wallet balance
-export const getWalletBalance = async () => {
-  await delay(800);
-  return {
-    sol: 2.45,
-    sai: 120.50,
-  };
-};
-
-// Mock user's CDPs
-export const getCDPs = async () => {
-  await delay(1000);
-  return [
-    {
-      id: 'cdp-123456789abcdef',
-      collateralAmount: 1.5,
-      debtAmount: 15,
-      collateralizationRatio: 150,
-      status: 'safe',
-      liquidationPrice: 6.67,
-    },
-    {
-      id: 'cdp-987654321fedcba',
-      collateralAmount: 0.8,
-      debtAmount: 5,
-      collateralizationRatio: 240,
-      status: 'safe',
-      liquidationPrice: 4.17,
+// Mock wallet connection function
+export const connectWallet = async () => {
+    if (!window.solana) {
+        throw new Error('Phantom wallet not found');
     }
-  ];
+    try {
+        const response = await window.solana.connect();
+        return {
+            success: true,
+            publicKey: response.publicKey.toString()
+        };
+    } catch (error) {
+        return {
+            success: false,
+            error: error.message
+        };
+    }
 };
 
-// Mock CDP details
-export const getCDPDetails = async (cdpId) => {
-  await delay(800);
-  
-  // Simulate different CDPs based on ID
-  if (cdpId === 'cdp-123456789abcdef') {
+export const initializeAPI = (wallet) => {
+    solanaAPI = new SolanaAPI(connection, wallet);
+};
+
+export const createCDP = async (collateralAmount, saiAmount) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    return await solanaAPI.createCDP(collateralAmount, saiAmount);
+};
+
+export const addCollateral = async (cdpAddress, amount) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    return await solanaAPI.addCollateral(cdpAddress, amount);
+};
+
+export const drawSai = async (cdpAddress, amount) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    return await solanaAPI.drawSai(cdpAddress, amount);
+};
+
+export const repaySai = async (cdpAddress, amount) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    return await solanaAPI.repaySai(cdpAddress, amount);
+};
+
+export const closeCDP = async (cdpAddress) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    return await solanaAPI.closeCDP(cdpAddress);
+};
+
+export const getUserCDPs = async () => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    return await solanaAPI.getUserCDPs();
+};
+
+export const getCDPInfo = async (cdpAddress) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    return await solanaAPI.getCDPInfo(cdpAddress);
+};
+
+// Keep the mock functions for development/testing
+export const getWalletBalance = async () => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    // TODO: Implement real wallet balance check
     return {
-      id: cdpId,
-      collateralAmount: 1.5,
-      debtAmount: 15,
-      collateralizationRatio: 150,
-      status: 'safe',
-      liquidationPrice: 6.67,
-      availableToBorrow: 0, // No more SAI can be borrowed
-      stabilityFee: '2.5%',
-      createdAt: '2023-05-15',
+        sol: 2.45,
+        sai: 120.50,
     };
-  }
-  
-  return {
-    id: cdpId,
-    collateralAmount: 0.8,
-    debtAmount: 5,
-    collateralizationRatio: 240,
-    status: 'safe',
-    liquidationPrice: 4.17,
-    availableToBorrow: 3, // Can borrow 3 more SAI before hitting 150% ratio
-    stabilityFee: '2.5%',
-    createdAt: '2023-06-02',
-  };
 };
 
-// Mock CDP creation
-export const createCDP = async (collateralAmount, saiToBorrow) => {
-  await delay(1500);
-  
-  if (collateralAmount < 0.05) {
-    throw new Error('Minimum collateral is 0.05 SOL');
-  }
-  
-  const maxSai = collateralAmount * 10; // 150% ratio means max SAI is 2/3 of collateral value in USD
-  if (saiToBorrow > maxSai) {
-    throw new Error('This would not maintain the minimum collateralization ratio');
-  }
-  
-  return {
-    id: `cdp-${Math.random().toString(36).substr(2, 9)}`,
-    collateralAmount,
-    debtAmount: saiToBorrow,
-    collateralizationRatio: Math.floor((collateralAmount * 15) / saiToBorrow),
-    status: 'safe',
-  };
+export const getCollateralPrice = async (collateralType) => {
+    // TODO: Implement real price feed
+    return 15; // Mock SOL price in USD
 };
 
-// Mock add collateral
-export const addCollateral = async (cdpId, amount) => {
-  await delay(1000);
-  
-  if (amount <= 0) {
-    throw new Error('Amount must be greater than 0');
-  }
-  
-  return true;
+export const checkVaultLiquidationRisk = async (cdpAddress) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    const cdpInfo = await solanaAPI.getCDPInfo(cdpAddress);
+    if (!cdpInfo.success) {
+        throw new Error('Failed to get CDP info');
+    }
+    
+    const collateralPrice = await getCollateralPrice(cdpInfo.data.collateralType);
+    const collateralValue = cdpInfo.data.collateralAmount * collateralPrice;
+    const collateralizationRatio = (collateralValue / cdpInfo.data.saiDebt) * 100;
+    
+    return {
+        ratio: collateralizationRatio,
+        status: collateralizationRatio >= 150 ? 'safe' : 'at_risk',
+        liquidationPrice: (cdpInfo.data.saiDebt * 1.5) / cdpInfo.data.collateralAmount
+    };
 };
 
-// Mock draw SAI
-export const drawSai = async (cdpId, amount) => {
-  await delay(1000);
-  
-  if (amount <= 0) {
-    throw new Error('Amount must be greater than 0');
-  }
-  
-  // For cdp-123456789abcdef, we said it has no more available to borrow
-  if (cdpId === 'cdp-123456789abcdef') {
-    throw new Error('This would exceed the safe borrowing limit');
-  }
-  
-  return true;
-};
-
-// Mock repay SAI
-export const repaySai = async (cdpId, amount) => {
-  await delay(1000);
-  
-  if (amount <= 0) {
-    throw new Error('Amount must be greater than 0');
-  }
-  
-  return true;
-};
-
-// Mock close CDP
-export const closeCDP = async (cdpId) => {
-  await delay(1200);
-  
-  // Get CDP details to check if debt is repaid
-  const cdp = await getCDPDetails(cdpId);
-  if (cdp.debtAmount > 0) {
-    throw new Error('You must repay all debt before closing the CDP');
-  }
-  
-  return true;
+export const getAllActiveLiquidations = async () => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    // TODO: Implement real liquidation fetching
+    return [];
 };
 
 // Mock governance functions
@@ -191,8 +170,6 @@ export const createProposal = async (title, description, changes) => {
 };
 
 // Export aliases for function names that are used in the components
-export const getUserCDPs = getCDPs;
-export const getCDPInfo = getCDPDetails;
 export const getAllProposals = getProposals;
 export const getProposalInfo = getProposalDetails;
 export const getUserSLDBalance = async () => {
@@ -210,4 +187,23 @@ export const getGovernanceData = async () => {
 export const executeProposal = async (proposalId) => {
   await delay(1000);
   return true;
+};
+
+export const getLiquidationHistoryForUser = async () => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    // TODO: Implement real liquidation history fetching
+    return [];
+};
+
+export const bidOnLiquidationAuction = async (auctionId, bidAmount) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    // TODO: Implement real auction bidding
+    return {
+        success: true,
+        message: 'Bid placed successfully'
+    };
 }; 

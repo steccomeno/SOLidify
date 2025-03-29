@@ -1,5 +1,6 @@
 use anchor_lang::prelude::*;
-use anchor_spl::token::{self, Mint, Token, TokenAccount};
+use anchor_spl::token::{self, Token, TokenAccount, Mint};
+use anchor_lang::solana_program::system_instruction;
 
 declare_id!("GKa59ebtzxEwcGNJEfAb7SEUkUBS1bDtr8GwdH1RCtN9");
 
@@ -60,7 +61,7 @@ pub mod sld {
         vote: bool,
     ) -> Result<()> {
         let proposal = &mut ctx.accounts.proposal;
-        let voter = &mut ctx.accounts.voter;
+        let voter = &mut ctx.accounts.voter_account;
         let clock = Clock::get()?;
 
         // Check if proposal is still active
@@ -257,17 +258,22 @@ pub struct CreateProposal<'info> {
 pub struct CastVote<'info> {
     #[account(mut)]
     pub proposal: Account<'info, Proposal>,
+    
     #[account(
         init_if_needed,
         payer = voter_signer,
-        space = 8 + Voter::LEN,
+        space = Voter::LEN,
         seeds = [b"voter", proposal.key().as_ref(), voter_signer.key().as_ref()],
         bump
     )]
-    pub voter: Account<'info, Voter>,
+    pub voter_account: Account<'info, Voter>,
+    
+    #[account(mut)]
     pub voter_token_account: Account<'info, TokenAccount>,
+    
     #[account(mut)]
     pub voter_signer: Signer<'info>,
+    
     pub system_program: Program<'info, System>,
     pub rent: Sysvar<'info, Rent>,
 }
