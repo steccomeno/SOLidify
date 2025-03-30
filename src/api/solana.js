@@ -243,9 +243,33 @@ export class SolanaAPI {
         try {
             console.log(`Creating CDP with ${collateralAmount} SOL collateral for ${saiAmount} SAI`);
             
+            // Validate input
+            if (isNaN(collateralAmount) || collateralAmount <= 0) {
+                return {
+                    success: false,
+                    error: 'Collateral amount must be a positive number'
+                };
+            }
+            
+            if (isNaN(saiAmount) || saiAmount <= 0) {
+                return {
+                    success: false,
+                    error: 'SAI amount must be a positive number'
+                };
+            }
+            
+            // Check balance
+            const balance = await this.getTokenBalances();
+            if (balance.sol < collateralAmount) {
+                return {
+                    success: false,
+                    error: `Insufficient SOL balance. Available: ${balance.sol}, Required: ${collateralAmount}`
+                };
+            }
+            
             // Convert to raw units
-            const collateralLamports = collateralAmount * LAMPORTS_PER_SOL;
-            const saiRaw = saiAmount * Math.pow(10, SAI_DECIMALS);
+            const collateralLamports = Math.floor(collateralAmount * LAMPORTS_PER_SOL);
+            const saiRaw = Math.floor(saiAmount * Math.pow(10, SAI_DECIMALS));
             
             console.log(`Using ${collateralLamports} lamports and ${saiRaw} raw SAI units`);
             
@@ -287,18 +311,15 @@ export class SolanaAPI {
                 ownerSai: ownerSai.toString()
             });
             
-            console.log('Using simplified direct approach...');
-            
             // Check if the SAI token account exists
             let saiTokenAccountExists = false;
             try {
                 const tokenAccountInfo = await this.connection.getAccountInfo(ownerSai);
                 saiTokenAccountExists = !!tokenAccountInfo;
+                console.log(saiTokenAccountExists ? 'SAI token account exists' : 'SAI token account does not exist, will create it');
             } catch (error) {
                 console.log('Error checking SAI token account:', error);
             }
-            
-            console.log(saiTokenAccountExists ? 'SAI token account exists' : 'SAI token account does not exist, will create it');
             
             // Create a new transaction
             const transaction = new Transaction();
@@ -327,63 +348,75 @@ export class SolanaAPI {
                 saiAmount: saiBN.toString()
             });
             
-            // Add init CDP instruction - FIXED PARAMETERS
-            transaction.add(
-                await this.program.methods
-                    .initializeCdp(
-                        collateralBN,  // Just pass collateral amount
-                        saiBN         // Just pass SAI amount
-                    )
-                    .accounts({
-                        user: this.wallet.publicKey,
-                        cdp,
-                        vault,
-                        mintAuthority,
-                        userCollateral: ownerCollateral,
-                        userSai: ownerSai,
-                        saiMint: new PublicKey(this.saiMint),
-                        wsolMint: new PublicKey(WSOL_MINT),
-                        tokenProgram: TOKEN_PROGRAM_ID,
-                        systemProgram: SystemProgram.programId,
-                        rent: SYSVAR_RENT_PUBKEY,
-                    })
-                    .instruction()
-            );
+            try {
+                // Add init CDP instruction
+                transaction.add(
+                    await this.program.methods
+                        .initializeCdp(
+                            collateralBN,
+                            saiBN
+                        )
+                        .accounts({
+                            user: this.wallet.publicKey,
+                            cdp,
+                            vault,
+                            mintAuthority,
+                            userCollateral: ownerCollateral,
+                            userSai: ownerSai,
+                            saiMint: new PublicKey(this.saiMint),
+                            wsolMint: new PublicKey(WSOL_MINT),
+                            tokenProgram: TOKEN_PROGRAM_ID,
+                            systemProgram: SystemProgram.programId,
+                            rent: SYSVAR_RENT_PUBKEY,
+                        })
+                        .instruction()
+                );
+            } catch (instructionError) {
+                console.error('Error creating initializeCdp instruction:', instructionError);
+                return {
+                    success: false,
+                    error: `Error creating CDP instruction: ${instructionError.message}`
+                };
+            }
             
             // Get recent blockhash
             const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = this.wallet.publicKey;
             
-            console.log('Transaction prepared:', {
+            console.log('Transaction prepared for creating CDP:', {
                 instructions: transaction.instructions.length,
-                recentBlockhash: blockhash,
-                signers: [this.wallet.publicKey.toString()],
+                recentBlockhash: blockhash
             });
             
-            // Try different approaches for transaction signing/sending
+            // Try using direct Phantom API
             try {
-                console.log('Directly using signAndSendTransaction from Phantom...');
+                console.log('Using direct Phantom API to create CDP');
                 
-                // Get direct access to Phantom for better compatibility
+                // Get direct access to Phantom
                 const phantomWallet = window.solana;
                 
                 if (!phantomWallet || !phantomWallet.isPhantom) {
                     throw new Error('Phantom wallet not available');
                 }
                 
-                // Use the direct Phantom API for maximum compatibility
+                // Make sure we're connected
+                if (!phantomWallet.isConnected) {
+                    console.log('Phantom not connected, connecting first...');
+                    await phantomWallet.connect();
+                }
+                
                 const signedTransaction = await phantomWallet.signAndSendTransaction(transaction);
-                console.log('Transaction signed and sent:', signedTransaction);
+                console.log('Transaction sent:', signedTransaction);
                 
                 // Confirm the transaction
-                const confirmation = await this.connection.confirmTransaction({
+                await this.connection.confirmTransaction({
                     blockhash,
                     lastValidBlockHeight,
                     signature: signedTransaction.signature
                 });
                 
-                console.log('Transaction confirmed:', confirmation);
+                console.log('CDP created successfully with signature:', signedTransaction.signature);
                 
                 return {
                     success: true,
@@ -391,7 +424,7 @@ export class SolanaAPI {
                     cdp: cdp.toString()
                 };
             } catch (error) {
-                console.error('Error with Phantom signAndSendTransaction:', error);
+                console.error('Error creating CDP with Phantom:', error);
                 
                 // Check if this was a user rejection
                 if (error.message && (
@@ -400,21 +433,19 @@ export class SolanaAPI {
                     error.message.includes('rejected') ||
                     error.message.includes('denied')
                 )) {
-                    console.log('Transaction was cancelled by the user');
                     return {
                         success: false,
                         error: 'Transaction was cancelled by the user'
                     };
                 }
                 
-                // Since the user didn't reject, it might be a technical issue
-                console.error('Technical error during transaction. Will try fallback method.');
-                
-                // Throw up to trigger fallback
-                throw error;
+                return {
+                    success: false,
+                    error: error.message || 'Unknown error creating CDP'
+                };
             }
         } catch (error) {
-            console.error('Error creating CDP:', error);
+            console.error('Error in createCDP:', error);
             return {
                 success: false,
                 error: error.message || 'Unknown error creating CDP'
@@ -653,6 +684,11 @@ export class SolanaAPI {
                 return { sol: 0, sai: 0 };
             }
 
+            // Create a variable to track if we've already attempted token account creation
+            if (!window._saiTokenAccountAttempted) {
+                window._saiTokenAccountAttempted = false;
+            }
+
             // Try multiple times to get SOL balance
             let solBalance = 0;
             let attempts = 0;
@@ -689,55 +725,70 @@ export class SolanaAPI {
                     const account = await getAccount(this.connection, tokenAccount);
                     saiBalance = Number(account.amount) / Math.pow(10, SAI_DECIMALS);
                     console.log(`Found SAI token account with ${saiBalance} SAI`);
+                    // Reset the attempt flag if we successfully get the account
+                    window._saiTokenAccountAttempted = false;
                 } catch (error) {
                     if (error.name === 'TokenAccountNotFoundError') {
                         console.log('SAI token account does not exist yet - this is normal for new users');
-                        // Create the token account automatically
-                        try {
-                            console.log('Creating SAI token account automatically...');
-                            const transaction = new Transaction().add(
-                                createAssociatedTokenAccountInstruction(
-                                    this.wallet.publicKey,
-                                    tokenAccount,
-                                    this.wallet.publicKey,
-                                    new PublicKey(this.saiMint)
-                                )
-                            );
+                        
+                        // Only try to create the token account if we haven't attempted it in this session
+                        if (!window._saiTokenAccountAttempted) {
+                            window._saiTokenAccountAttempted = true;
                             
-                            // Get recent blockhash
-                            const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
-                            transaction.recentBlockhash = blockhash;
-                            transaction.feePayer = this.wallet.publicKey;
-                            
-                            console.log('Transaction prepared for creating token account');
-                            
-                            // Try to get window.solana directly
-                            if (window.solana && window.solana.isPhantom) {
-                                try {
-                                    console.log('Using direct Phantom API to create token account');
-                                    // Make sure we're connected
-                                    if (!window.solana.isConnected) {
-                                        console.log('Phantom not connected, connecting first...');
-                                        await window.solana.connect();
+                            try {
+                                console.log('Creating SAI token account automatically...');
+                                const transaction = new Transaction().add(
+                                    createAssociatedTokenAccountInstruction(
+                                        this.wallet.publicKey,
+                                        tokenAccount,
+                                        this.wallet.publicKey,
+                                        new PublicKey(this.saiMint)
+                                    )
+                                );
+                                
+                                // Get recent blockhash
+                                const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
+                                transaction.recentBlockhash = blockhash;
+                                transaction.feePayer = this.wallet.publicKey;
+                                
+                                console.log('Transaction prepared for creating token account');
+                                
+                                // Try to get window.solana directly
+                                if (window.solana && window.solana.isPhantom) {
+                                    try {
+                                        console.log('Using direct Phantom API to create token account');
+                                        // Make sure we're connected
+                                        if (!window.solana.isConnected) {
+                                            console.log('Phantom not connected, connecting first...');
+                                            await window.solana.connect();
+                                        }
+                                        
+                                        const signature = await window.solana.signAndSendTransaction(transaction);
+                                        
+                                        console.log('Transaction sent:', signature);
+                                        
+                                        await this.connection.confirmTransaction({
+                                            blockhash,
+                                            lastValidBlockHeight,
+                                            signature: signature.signature
+                                        });
+                                        
+                                        console.log('SAI token account created successfully:', tokenAccount.toString());
+                                    } catch (phantomError) {
+                                        console.log('User declined to create SAI token account:', phantomError.message);
+                                        // Store this error to avoid making multiple attempts
+                                        window._saiTokenAccountError = phantomError.message;
                                     }
-                                    
-                                    const signature = await window.solana.signAndSendTransaction(transaction);
-                                    
-                                    console.log('Transaction sent:', signature);
-                                    
-                                    await this.connection.confirmTransaction({
-                                        blockhash,
-                                        lastValidBlockHeight,
-                                        signature: signature.signature
-                                    });
-                                    
-                                    console.log('SAI token account created successfully:', tokenAccount.toString());
-                                } catch (phantomError) {
-                                    console.log('User declined to create SAI token account:', phantomError.message);
                                 }
+                            } catch (createError) {
+                                console.error('Failed to create SAI token account automatically:', createError);
+                                window._saiTokenAccountError = createError.message;
                             }
-                        } catch (createError) {
-                            console.error('Failed to create SAI token account automatically:', createError);
+                        } else {
+                            console.log('Already attempted to create SAI token account this session, skipping');
+                            if (window._saiTokenAccountError) {
+                                console.log('Previous error:', window._saiTokenAccountError);
+                            }
                         }
                     } else {
                         console.error('Error getting SAI token account:', error);
