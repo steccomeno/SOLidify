@@ -41,23 +41,48 @@ for (const network in RPC_ENDPOINTS) {
 }
 
 // Get next best endpoint based on rotation, success rates, and time since last use
-function getNextEndpoint(network = 'devnet') {
+function getNextEndpoint(network = 'devnet', excludeEndpoints = []) {
   const endpoints = RPC_ENDPOINTS[network] || RPC_ENDPOINTS.devnet;
   const now = Date.now();
   
+  // If all endpoints are excluded, reset exclusions but apply a penalty
+  if (excludeEndpoints.length >= endpoints.length) {
+    console.warn('All endpoints have been tried and excluded. Resetting exclusions with penalties.');
+    excludeEndpoints = [];
+    
+    // Apply temporary penalties to all endpoints
+    endpoints.forEach(endpoint => {
+      connectionStats.successRates[endpoint] = Math.max(0.1, (connectionStats.successRates[endpoint] || 0.5) * 0.5);
+      connectionStats.lastUsed[endpoint] = now - 30000; // Make them available again, but with a 30s penalty
+    });
+  }
+  
   // Calculate a score for each endpoint
-  const scoredEndpoints = endpoints.map(endpoint => {
-    const timeSinceLastUse = now - (connectionStats.lastUsed[endpoint] || 0);
-    const timeBonus = Math.min(timeSinceLastUse / 1000, 30); // Max 30 second bonus
-    const successRate = connectionStats.successRates[endpoint] || 0.5;
-    const responseTime = connectionStats.responseTimesMs[endpoint] || 1000;
-    const rateLimitPenalty = connectionStats.rateLimitHits[endpoint] * 10;
+  const scoredEndpoints = endpoints
+    .filter(endpoint => !excludeEndpoints.includes(endpoint)) // Skip excluded endpoints
+    .map(endpoint => {
+      const timeSinceLastUse = now - (connectionStats.lastUsed[endpoint] || 0);
+      const timeBonus = Math.min(timeSinceLastUse / 1000, 30); // Max 30 second bonus
+      const successRate = connectionStats.successRates[endpoint] || 0.5;
+      const responseTime = connectionStats.responseTimesMs[endpoint] || 1000;
+      const rateLimitPenalty = connectionStats.rateLimitHits[endpoint] * 10;
+      
+      // Higher score is better: prioritize success rate, time since last use, and fast response times
+      const score = (successRate * 100) + timeBonus - (responseTime / 100) - rateLimitPenalty;
+      
+      return { endpoint, score };
+    });
+  
+  // If no valid endpoints after filtering, use any endpoint
+  if (scoredEndpoints.length === 0) {
+    const randomIndex = Math.floor(Math.random() * endpoints.length);
+    const randomEndpoint = endpoints[randomIndex];
+    console.warn(`No valid endpoints available after filtering. Using random endpoint: ${randomEndpoint}`);
     
-    // Higher score is better: prioritize success rate, time since last use, and fast response times
-    const score = (successRate * 100) + timeBonus - (responseTime / 100) - rateLimitPenalty;
-    
-    return { endpoint, score };
-  });
+    // Mark as used
+    connectionStats.lastUsed[randomEndpoint] = now;
+    return randomEndpoint;
+  }
   
   // Sort by score descending
   scoredEndpoints.sort((a, b) => b.score - a.score);
@@ -96,14 +121,14 @@ function updateEndpointStats(endpoint, success, responseTimeMs, wasRateLimit = f
 
 // Enhanced connection creation with endpoint rotation
 async function createConnectionWithFallback(network = 'devnet', retryCount = 0, usedEndpoints = []) {
-  // Get next best endpoint
-  const endpoint = getNextEndpoint(network);
-  
-  // Don't retry with the same endpoint too many times
-  if (usedEndpoints.includes(endpoint) && usedEndpoints.length < RPC_ENDPOINTS[network].length) {
-    console.log(`Already tried ${endpoint}, selecting another...`);
-    return createConnectionWithFallback(network, retryCount, usedEndpoints);
+  // Safety check to prevent infinite recursion
+  if (retryCount >= RPC_ENDPOINTS[network].length * 2) {
+    console.error('All RPC endpoints failed after maximum retries');
+    throw new Error('Unable to connect to Solana network: All RPC endpoints failed');
   }
+
+  // Get next best endpoint, excluding previously used ones
+  const endpoint = getNextEndpoint(network, usedEndpoints);
   
   // Track this attempt
   const updatedUsedEndpoints = [...usedEndpoints, endpoint];
@@ -210,6 +235,36 @@ export const isAPIInitialized = () => {
     return solanaAPI !== null;
 };
 
+// Updated initialize function with recovery logic
+export const initialize = async () => {
+  try {
+    console.log('Initializing API with automatic RPC endpoint rotation');
+    
+    // Use enhanced getConnection instead of directly creating a Connection
+    let connection = null;
+    try {
+      connection = await getConnection('devnet');
+      console.log('Connection established with endpoint:', connection.rpcEndpoint);
+    } catch (connectionError) {
+      console.error('Failed to establish connection with rotation system:', connectionError);
+      
+      // Emergency fallback to default RPC endpoint
+      console.warn('Falling back to default RPC endpoint as last resort');
+      connection = new Connection('https://api.devnet.solana.com', {
+        commitment: 'confirmed',
+        confirmTransactionInitialTimeout: 30000
+      });
+    }
+    
+    console.log('Using automatic endpoint rotation for better reliability');
+    return connection;
+  } catch (error) {
+    console.error('Fatal error initializing API:', error);
+    throw error;
+  }
+};
+
+// Updated initializeAPI function with better error handling
 export const initializeAPI = async (wallet) => {
     try {
         console.log('API INIT - STEP 1: Starting initialization with wallet details:', {
@@ -267,8 +322,29 @@ export const initializeAPI = async (wallet) => {
 
         console.log('API INIT - STEP 2: Wallet validated, attempting to create SolanaAPI instance');
         
-        // Use getConnection instead of directly creating a Connection
-        const connection = await getConnection('devnet');
+        // Try to get connection with multiple retries
+        let connection = null;
+        let connectionAttempts = 0;
+        const maxConnectionAttempts = 3;
+        
+        while (!connection && connectionAttempts < maxConnectionAttempts) {
+            try {
+                connectionAttempts++;
+                console.log(`API INIT - Connection attempt ${connectionAttempts}/${maxConnectionAttempts}`);
+                connection = await getConnection('devnet');
+            } catch (connectionError) {
+                console.error(`API INIT - Connection attempt ${connectionAttempts} failed:`, connectionError);
+                
+                if (connectionAttempts >= maxConnectionAttempts) {
+                    console.error('API INIT - All connection attempts failed, using emergency fallback');
+                    // Emergency fallback to default connection
+                    connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+                } else {
+                    // Wait before retry
+                    await new Promise(resolve => setTimeout(resolve, 2000));
+                }
+            }
+        }
         
         console.log('Connection established with endpoint:', connection.rpcEndpoint);
         
@@ -288,7 +364,15 @@ export const initializeAPI = async (wallet) => {
         }
 
         console.log('API INIT - STEP 4: Creating SolanaAPI instance');
-        solanaAPI = new SolanaAPI(connection, wallet);
+        solanaAPI = new SolanaAPI(wallet, PROGRAM_ID.toString());
+        
+        // Initialize the API with the connection
+        await solanaAPI.ensureConnection();
+        const programInitResult = await solanaAPI.initialize();
+        
+        if (!programInitResult) {
+            throw new Error('Failed to initialize Solana program');
+        }
         
         // Make the API available globally for debugging
         window.solanaAPI = solanaAPI;

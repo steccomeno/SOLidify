@@ -90,7 +90,21 @@ export class SolanaAPI {
     async ensureConnection() {
         try {
             // Get the current connection or create a new one
-            this.connection = await getActiveConnection();
+            if (!this.connection) {
+                console.log('No connection exists, creating new connection');
+                this.connection = await getActiveConnection();
+            } else {
+                // Test if the existing connection is still working
+                try {
+                    // Use a simple method to test connection
+                    await this.connection.getVersion();
+                    console.log('Existing connection is working');
+                } catch (testError) {
+                    console.error('Existing connection failed test, refreshing:', testError.message);
+                    // If the connection test fails, refresh it
+                    this.connection = await refreshConnection();
+                }
+            }
             
             if (!this.connection) {
                 throw new Error('Failed to get active connection');
@@ -99,7 +113,19 @@ export class SolanaAPI {
             return this.connection;
         } catch (error) {
             console.error('Error ensuring connection:', error);
-            throw error;
+            
+            // If we get here, both getActiveConnection and refreshConnection failed
+            // Try one last fallback to the default RPC endpoint
+            try {
+                console.log('Attempting emergency fallback to default RPC endpoint');
+                // Import Connection directly to avoid circular dependency
+                const { Connection } = require('@solana/web3.js');
+                this.connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+                return this.connection;
+            } catch (fallbackError) {
+                console.error('Emergency fallback failed:', fallbackError);
+                throw error; // Throw the original error
+            }
         }
     }
 

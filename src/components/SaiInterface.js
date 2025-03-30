@@ -326,14 +326,25 @@ const SaiInterface = () => {
     };
 
     const loadWalletData = async () => {
-        console.log("SaiInterface - Loading wallet balances");
         try {
-            const balance = await getWalletBalance();
-            console.log("SaiInterface - Wallet balances received:", balance);
-            setWalletBalance(balance);
+            setLoading(true);
+            const balances = await getWalletBalance();
+            setWalletBalance(balances);
+            setLoading(false);
         } catch (error) {
-            console.error('SaiInterface - Error loading wallet data:', error);
-            setError(`Failed to load wallet balances: ${error.message}`);
+            console.error('Error loading wallet data:', error);
+            
+            // Check if this is a connection issue
+            if (error.message?.includes('429') || 
+                error.message?.includes('rate limit') || 
+                error.message?.includes('Connection') ||
+                error.message?.includes('network')) {
+                
+                await recoverFromConnectionError();
+            } else {
+                setLoading(false);
+                setError(`Error loading wallet data: ${error.message}`);
+            }
         }
     };
 
@@ -1151,6 +1162,50 @@ const SaiInterface = () => {
         await loadWalletData();
     };
 
+    // Add this function inside the component to handle connection recovery
+    const recoverFromConnectionError = async () => {
+        try {
+            console.log('Attempting to recover from connection error...');
+            setError('Connection issue detected. Trying to reconnect...');
+            setLoading(true);
+            
+            // Refresh the connection
+            await refreshConnection();
+            
+            // Test the connection by getting balances
+            const balances = await getWalletBalance();
+            console.log('Connection recovered, balances:', balances);
+            
+            setWalletBalance(balances);
+            setLoading(false);
+            setError(null);
+            
+            return true;
+        } catch (error) {
+            console.error('Failed to recover from connection error:', error);
+            setLoading(false);
+            setError('Failed to reconnect. Please refresh the page and try again.');
+            return false;
+        }
+    };
+
+    // Also add a button to manually trigger connection recovery
+    const renderConnectionRecoveryOption = () => {
+        if (error && (error.includes('429') || error.includes('Connection') || error.includes('network'))) {
+            return (
+                <div className="connection-recovery">
+                    <p>Connection issues detected.</p>
+                    <button 
+                        onClick={recoverFromConnectionError}
+                        className="recovery-button">
+                        Try Reconnecting
+                    </button>
+                </div>
+            );
+        }
+        return null;
+    };
+
     // Main render function
     return (
         <div className="sai-interface-container">
@@ -1300,6 +1355,8 @@ const SaiInterface = () => {
                     </button>
                 </div>
             )}
+
+            {renderConnectionRecoveryOption()}
         </div>
     );
 };
