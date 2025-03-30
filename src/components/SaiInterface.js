@@ -133,14 +133,61 @@ const SaiInterface = () => {
         console.log("SaiInterface - Initializing wallet and loading data");
         setWalletStatus('initializing');
         
-        if (connected && wallet && publicKey) {
+        if (connected && wallet) {
             try {
                 console.log('SaiInterface - Wallet connected:', {
                     connected,
                     hasWallet: !!wallet,
                     hasPublicKey: !!publicKey,
-                    publicKeyStr: publicKey.toString()
+                    publicKeyStr: publicKey?.toString()
                 });
+
+                // If we don't have a public key from wallet adapter but Phantom is available
+                if (!publicKey && window.solana && window.solana.isPhantom) {
+                    console.log('SaiInterface - Public key not available from wallet adapter. Trying direct connection to Phantom');
+                    try {
+                        // Try to connect directly to Phantom and get its public key
+                        const directPhantomResponse = await window.solana.connect();
+                        console.log('SaiInterface - Direct Phantom connection succeeded:', directPhantomResponse);
+                        
+                        // Create a local patch for the wallet object that includes the public key
+                        const patchedWallet = {
+                            ...wallet,
+                            publicKey: directPhantomResponse.publicKey,
+                            connected: true,
+                            // If wallet lacks signTransaction, use the one from Phantom
+                            signTransaction: wallet.signTransaction || 
+                                ((tx) => window.solana.signTransaction(tx))
+                        };
+                        
+                        console.log('SaiInterface - Created patched wallet with publicKey:', 
+                            patchedWallet.publicKey.toString());
+                        
+                        // Initialize API with our patched wallet
+                        if (!isAPIInitialized()) {
+                            console.log('SaiInterface - API not initialized, initializing with patched wallet...');
+                            try {
+                                await initializeAPI(patchedWallet);
+                                console.log('SaiInterface - API initialized successfully with patched wallet');
+                                setWalletStatus('connected');
+                                
+                                // Load data with patched wallet
+                                await Promise.all([
+                                    loadUserCDPs(),
+                                    loadWalletData(),
+                                    loadActiveLiquidations()
+                                ]);
+                                
+                                return true;
+                            } catch (apiError) {
+                                console.error('SaiInterface - API initialization with patched wallet failed:', apiError);
+                                throw apiError;
+                            }
+                        }
+                    } catch (phantomError) {
+                        console.error('SaiInterface - Direct Phantom connection failed:', phantomError);
+                    }
+                }
 
                 // Clear any existing errors
                 setError(null);
@@ -158,7 +205,8 @@ const SaiInterface = () => {
                         setWalletStatus('error');
                         
                         // Try to reconnect if the error is related to wallet connection
-                        if (apiError.message.includes('Wallet is not connected')) {
+                        if (apiError.message.includes('Wallet is not connected') || 
+                            apiError.message.includes('public key is not available')) {
                             return await attemptWalletReconnect();
                         }
                         return false;

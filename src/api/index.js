@@ -40,10 +40,26 @@ export const initializeAPI = (wallet) => {
             throw new Error('API INIT ERROR: Wallet object is null or undefined');
         }
 
+        // Handle case where wallet adapter doesn't have public key but Phantom is connected
+        if (!wallet.publicKey && window.solana && window.solana.isPhantom && window.solana.isConnected) {
+            console.log('API INIT - Wallet adapter missing publicKey but Phantom is connected. Attempting to fix...');
+            if (window.solana.publicKey) {
+                console.log('API INIT - Found publicKey in window.solana:', window.solana.publicKey.toString());
+                // Patch the wallet object
+                wallet.publicKey = window.solana.publicKey;
+                console.log('API INIT - Patched wallet with publicKey from window.solana');
+            } else {
+                console.error('API INIT - Phantom is connected but publicKey not available in window.solana');
+            }
+        }
+
         if (!wallet.connected && window.solana && window.solana.isPhantom) {
             console.log('API INIT - Wallet not showing as connected, checking Phantom directly...');
             if (window.solana.isConnected) {
                 console.log('API INIT - Phantom reports connected status, proceeding anyway');
+                // Patch the wallet object
+                wallet.connected = true;
+                console.log('API INIT - Patched wallet.connected = true');
             } else {
                 throw new Error('API INIT ERROR: Wallet is not connected');
             }
@@ -56,7 +72,13 @@ export const initializeAPI = (wallet) => {
         }
 
         if (!wallet.signTransaction || typeof wallet.signTransaction !== 'function') {
-            throw new Error('API INIT ERROR: Wallet signTransaction function is not available');
+            // If window.solana has the signTransaction method, use that
+            if (window.solana && typeof window.solana.signTransaction === 'function') {
+                console.log('API INIT - Using window.solana.signTransaction');
+                wallet.signTransaction = (...args) => window.solana.signTransaction(...args);
+            } else {
+                throw new Error('API INIT ERROR: Wallet signTransaction function is not available');
+            }
         }
 
         console.log('API INIT - STEP 2: Wallet validated, attempting to create SolanaAPI instance');
