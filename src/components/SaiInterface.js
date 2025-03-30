@@ -364,6 +364,49 @@ const SaiInterface = () => {
         }
     };
 
+    // Helper function to diagnose Phantom errors
+    const tryDiagnosePhantomError = () => {
+        try {
+            if (!window.solana || !window.solana.isPhantom) {
+                return 'Phantom wallet not detected. Please install Phantom wallet extension.';
+            }
+            
+            if (!window.solana.isConnected) {
+                return 'Phantom wallet is not connected. Please connect your wallet and try again.';
+            }
+            
+            if (!window.solana.publicKey) {
+                return 'Public key not available from Phantom. Please reconnect your wallet.';
+            }
+            
+            // Check network
+            if (window.solana.connection && window.solana.connection.rpcEndpoint) {
+                const endpoint = window.solana.connection.rpcEndpoint;
+                if (!endpoint.includes('devnet')) {
+                    return `Phantom is connected to wrong network: ${endpoint}. Please switch to Devnet.`;
+                }
+            }
+            
+            // Check transaction methods
+            const hasSignAndSend = typeof window.solana.signAndSendTransaction === 'function';
+            const hasSignTx = typeof window.solana.signTransaction === 'function';
+            
+            if (!hasSignAndSend && !hasSignTx) {
+                return 'Phantom wallet is missing transaction signing methods. Try updating your extension.';
+            }
+            
+            // If we can't diagnose it specifically, suggest some common solutions
+            return 'Transaction failed due to wallet issues. Try the following:\n' +
+                '1. Refresh the page\n' +
+                '2. Disconnect and reconnect your wallet\n' +
+                '3. Make sure you\'re on Devnet network\n' +
+                '4. Update your Phantom wallet extension';
+        } catch (err) {
+            console.error('Error in diagnosis:', err);
+            return 'Transaction failed. Please try refreshing the page and connecting again.';
+        }
+    };
+
     const handleCreateCDP = async (e) => {
         e.preventDefault();
         
@@ -426,6 +469,22 @@ const SaiInterface = () => {
             
             console.log('Creating CDP with:', { collateral, sai });
             
+            // Check if we can use Phantom directly for better compatibility
+            if (window.solana && window.solana.isPhantom) {
+                console.log('Using direct Phantom wallet for better compatibility');
+                
+                // Ensure Phantom is connected
+                if (!window.solana.isConnected) {
+                    try {
+                        await window.solana.connect();
+                        console.log('Connected to Phantom wallet');
+                    } catch (connectError) {
+                        console.error('Failed to connect to Phantom:', connectError);
+                        throw new Error('Failed to connect to Phantom wallet');
+                    }
+                }
+            }
+            
             // Add a retry mechanism
             let retryCount = 0;
             let result = null;
@@ -460,10 +519,10 @@ const SaiInterface = () => {
                 // Handle known error types with user-friendly messages
                 let errorMessage = result.error;
                 
-                if (result.error.includes('rejected the request')) {
+                if (result.error.includes('rejected') || result.error.includes('cancelled')) {
                     errorMessage = 'Transaction cancelled. You rejected the transaction in your wallet.';
                 } else if (result.error.includes('Unexpected error')) {
-                    errorMessage = 'Transaction failed. Make sure your Phantom wallet is connected and try again.';
+                    errorMessage = tryDiagnosePhantomError();
                 } else if (result.error.includes('insufficient funds')) {
                     errorMessage = 'Insufficient funds for transaction. Make sure you have enough SOL to cover fees.';
                 }
@@ -483,6 +542,8 @@ const SaiInterface = () => {
                 errorMessage = 'Network error. Please try again in a moment.';
             } else if (error.message.includes('timed out')) {
                 errorMessage = 'Transaction timed out. The network may be congested, please try again.';
+            } else if (error.message.includes('Unexpected error')) {
+                errorMessage = tryDiagnosePhantomError();
             }
             
             setError(errorMessage);

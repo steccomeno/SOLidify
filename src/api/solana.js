@@ -291,120 +291,199 @@ export class SolanaAPI {
                 ownerSai: ownerSai.toString()
             });
 
-            // Create new Transaction
-            const transaction = new Transaction();
-
-            // Create associated token account for SAI if it doesn't exist
+            console.log('Using alternative direct approach for Phantom wallet...');
+            
+            // Instead of creating a transaction and trying to send it through the wallet adapter
+            // We'll directly invoke window.solana methods that we know work
+            
             try {
-                await getAccount(this.connection, ownerSai);
-                console.log('SAI token account exists, skipping creation');
-            } catch (error) {
-                console.log('SAI token account does not exist, adding creation instruction');
-                transaction.add(
-                    createAssociatedTokenAccountInstruction(
-                        this.wallet.publicKey,
-                        ownerSai,
-                        this.wallet.publicKey,
-                        SAI_MINT
+                if (!window.solana || !window.solana.isPhantom) {
+                    throw new Error('Phantom wallet not detected');
+                }
+                
+                if (!window.solana.isConnected) {
+                    console.log('Phantom wallet not connected, attempting to connect...');
+                    await window.solana.connect();
+                }
+                
+                // Check if SAI token account exists, create if needed
+                let needsTokenAccount = false;
+                try {
+                    await getAccount(this.connection, ownerSai);
+                    console.log('SAI token account exists, skipping creation');
+                } catch (error) {
+                    console.log('SAI token account does not exist, will create it');
+                    needsTokenAccount = true;
+                }
+                
+                // Create new Transaction
+                const transaction = new Transaction();
+                transaction.feePayer = this.wallet.publicKey;
+                
+                // Add instruction to create token account if needed
+                if (needsTokenAccount) {
+                    console.log('Adding instruction to create token account');
+                    transaction.add(
+                        createAssociatedTokenAccountInstruction(
+                            this.wallet.publicKey,
+                            ownerSai,
+                            this.wallet.publicKey,
+                            SAI_MINT
+                        )
+                    );
+                }
+                
+                console.log('Building initializeCdp instruction');
+                
+                // Build the initialize CDP instruction
+                const initCdpIx = await this.program.methods
+                    .initializeCdp(
+                        new BN(collateralLamports),
+                        new BN(saiRawAmount)
                     )
-                );
-            }
-
-            console.log('Building initializeCdp instruction');
-            
-            // Initialize CDP instruction
-            const initCdpIx = await this.program.methods
-                .initializeCdp(
-                    new BN(collateralLamports),
-                    new BN(saiRawAmount)
-                )
-                .accounts({
-                    owner: this.wallet.publicKey,
-                    cdp,
-                    ownerCollateral,
-                    collateralMint: SOL_MINT,
-                    vault,
-                    vaultAuthority,
-                    saiMint: SAI_MINT,
-                    ownerSai,
-                    mintAuthority,
-                    tokenProgram: TOKEN_PROGRAM_ID,
-                    systemProgram: SystemProgram.programId,
-                    rent: SYSVAR_RENT_PUBKEY,
-                })
-                .instruction();
-                
-            console.log('Adding initializeCdp instruction to transaction');
-            transaction.add(initCdpIx);
-
-            // Add a recent blockhash to the transaction
-            try {
-                const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
-                transaction.recentBlockhash = blockhash;
-                console.log('Added recentBlockhash to transaction:', blockhash);
-            } catch (error) {
-                console.error('Error getting blockhash:', error);
-                throw error;
-            }
-
-            // Set the fee payer
-            transaction.feePayer = this.wallet.publicKey;
-
-            console.log('Prepared transaction:', {
-                hasBlockhash: !!transaction.recentBlockhash,
-                numInstructions: transaction.instructions.length,
-                feePayer: transaction.feePayer?.toString()
-            });
-
-            // Send the transaction
-            console.log('Sending transaction to wallet for signing and broadcasting...');
-            let signature;
-            
-            try {
-                // First try with direct sendTransaction
-                signature = await this.wallet.sendTransaction(transaction, this.connection);
-                console.log('Transaction sent with signature:', signature);
-            } catch (error) {
-                console.error('Error sending transaction:', error);
-                
-                // If that fails with a specific error, try the fallback method
-                if (error.message.includes('Unexpected') || error.message.includes('rejected')) {
-                    console.log('Trying alternative transaction method...');
+                    .accounts({
+                        owner: this.wallet.publicKey,
+                        cdp,
+                        ownerCollateral,
+                        collateralMint: SOL_MINT,
+                        vault,
+                        vaultAuthority,
+                        saiMint: SAI_MINT,
+                        ownerSai,
+                        mintAuthority,
+                        tokenProgram: TOKEN_PROGRAM_ID,
+                        systemProgram: SystemProgram.programId,
+                        rent: SYSVAR_RENT_PUBKEY,
+                    })
+                    .instruction();
                     
+                // Add the instruction to the transaction
+                transaction.add(initCdpIx);
+                
+                // Get a fresh blockhash
+                const { blockhash } = await this.connection.getLatestBlockhash('finalized');
+                transaction.recentBlockhash = blockhash;
+                
+                console.log('Transaction prepared:', {
+                    instructions: transaction.instructions.length,
+                    recentBlockhash: transaction.recentBlockhash,
+                    signers: [this.wallet.publicKey.toString()]
+                });
+                
+                // Use the direct window.solana method
+                console.log('Sending transaction directly to Phantom...');
+                
+                // This method actually works much better with Phantom
+                // It handles both signing and sending
+                const { signature } = await window.solana.signAndSendTransaction(transaction);
+                
+                console.log('Transaction sent with signature:', signature);
+                console.log('Waiting for confirmation...');
+                
+                // Wait for confirmation
+                const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
+                console.log('Transaction confirmed:', confirmation);
+                
+                return {
+                    success: true,
+                    cdpAddress: cdp.toString(),
+                    signature
+                };
+                
+            } catch (directError) {
+                console.error('Error with direct Phantom approach:', directError);
+                
+                if (directError.message.includes('User rejected')) {
+                    return {
+                        success: false,
+                        error: 'Transaction was cancelled by the user'
+                    };
+                }
+                
+                // If direct approach failed, try another way
+                console.log('Trying alternative approach...');
+                
+                try {
+                    // Create transaction from scratch
+                    const transaction = new Transaction();
+                    transaction.feePayer = this.wallet.publicKey;
+                    
+                    // Add token account creation if needed
+                    let needsTokenAccount = false;
                     try {
-                        // Sign directly with wallet adapter
-                        const signedTx = await this.wallet.signTransaction(transaction);
-                        
-                        // Send the signed transaction
-                        signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
-                            skipPreflight: false,
-                            preflightCommitment: 'confirmed'
-                        });
-                        console.log('Alternative transaction sent with signature:', signature);
-                    } catch (fallbackError) {
-                        console.error('Alternative transaction method failed:', fallbackError);
-                        throw fallbackError;
+                        await getAccount(this.connection, ownerSai);
+                    } catch (error) {
+                        needsTokenAccount = true;
+                        transaction.add(
+                            createAssociatedTokenAccountInstruction(
+                                this.wallet.publicKey,
+                                ownerSai,
+                                this.wallet.publicKey,
+                                SAI_MINT
+                            )
+                        );
                     }
-                } else {
-                    throw error;
+                    
+                    // Add CDP initialization instruction
+                    transaction.add(
+                        await this.program.methods
+                            .initializeCdp(
+                                new BN(collateralLamports),
+                                new BN(saiRawAmount)
+                            )
+                            .accounts({
+                                owner: this.wallet.publicKey,
+                                cdp,
+                                ownerCollateral,
+                                collateralMint: SOL_MINT,
+                                vault,
+                                vaultAuthority,
+                                saiMint: SAI_MINT,
+                                ownerSai,
+                                mintAuthority,
+                                tokenProgram: TOKEN_PROGRAM_ID,
+                                systemProgram: SystemProgram.programId,
+                                rent: SYSVAR_RENT_PUBKEY,
+                            })
+                            .instruction()
+                    );
+                    
+                    // Use a simpler, more direct approach with the connection and wallet
+                    const { blockhash } = await this.connection.getRecentBlockhash();
+                    transaction.recentBlockhash = blockhash;
+                    
+                    // For Phantom, serialize the transaction to ensure correct format
+                    const serializedTx = transaction.serializeMessage();
+                    console.log('Serialized transaction:', Buffer.from(serializedTx).toString('base64'));
+                    
+                    // Use window.solana for simpler signing
+                    const { signature } = await window.solana.request({
+                        method: 'signAndSendTransaction',
+                        params: {
+                            message: Buffer.from(serializedTx).toString('base64'),
+                        },
+                    });
+                    
+                    console.log('Transaction sent via fallback with signature:', signature);
+                    
+                    const confirmation = await this.connection.confirmTransaction(signature);
+                    console.log('Transaction confirmed:', confirmation);
+                    
+                    return {
+                        success: true,
+                        cdpAddress: cdp.toString(),
+                        signature
+                    };
+                } catch (fallbackError) {
+                    console.error('Fallback approach failed:', fallbackError);
+                    throw fallbackError;
                 }
             }
-            
-            // Confirm the transaction
-            console.log('Confirming transaction...');
-            await this.connection.confirmTransaction(signature, 'confirmed');
-            console.log('Transaction confirmed!');
-
-            return {
-                success: true,
-                cdpAddress: cdp.toString(),
-                signature
-            };
         } catch (error) {
             console.error('Error creating CDP:', error);
             return {
                 success: false,
-                error: error.message
+                error: error.message || 'Unknown error creating CDP'
             };
         }
     }
