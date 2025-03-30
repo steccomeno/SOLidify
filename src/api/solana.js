@@ -686,22 +686,79 @@ export class SolanaAPI {
             
             console.log('Attempting to add SAI token to Phantom wallet...');
             
-            // Call Phantom's method to add a token
-            await window.solana.request({
-                method: "wallet_watchAsset",
-                params: {
-                    type: "SPL", // Solana's token type
-                    options: {
-                        address: this.saiMint, // The token address
-                        decimals: SAI_DECIMALS
+            // Try different methods for adding the token
+            try {
+                // Method 1: Using Phantom's recommended method
+                await window.solana.request({
+                    method: "wallet_watchAsset",
+                    params: {
+                        type: "SPL", // Solana's token type
+                        options: {
+                            address: this.saiMint, // The token address
+                            decimals: SAI_DECIMALS,
+                            symbol: "SAI",
+                            name: "SAI Stablecoin"
+                        }
                     }
+                });
+                
+                console.log('SAI token added to Phantom wallet successfully (Method 1)');
+                return { success: true };
+            } catch (method1Error) {
+                console.log('Method 1 failed:', method1Error);
+                
+                // Method 2: Using Phantom's experimental token API
+                try {
+                    if (window.phantom && window.phantom.solana && window.phantom.solana.tokens) {
+                        console.log('Trying Method 2 with phantom.solana.tokens');
+                        await window.phantom.solana.tokens.add({
+                            address: this.saiMint,
+                            symbol: "SAI",
+                            name: "SAI Stablecoin", 
+                            decimals: SAI_DECIMALS,
+                            logoURI: "https://raw.githubusercontent.com/solana-labs/token-list/main/assets/mainnet/So11111111111111111111111111111111111111112/logo.png" // Using SOL logo as placeholder
+                        });
+                        
+                        console.log('SAI token added to Phantom wallet successfully (Method 2)');
+                        return { success: true };
+                    }
+                } catch (method2Error) {
+                    console.log('Method 2 failed:', method2Error);
                 }
-            });
-            
-            console.log('SAI token added to Phantom wallet successfully');
-            return { success: true };
+                
+                // Method 3: Direct instruction for the user
+                const mintAddress = this.saiMint;
+                console.log('Providing manual instructions to add token');
+                
+                // Create a dialog with easy-to-copy information
+                const message = `To add SAI token to your Phantom wallet:\n\n` +
+                    `1. Open Phantom extension\n` +
+                    `2. Click the hamburger menu (3 lines) in the top right\n` +
+                    `3. Click "Add token"\n` +
+                    `4. Paste this address into 'Token Address':\n\n` +
+                    `${mintAddress}\n\n` +
+                    `5. Click "Add" and confirm`;
+                    
+                alert(message);
+                
+                // If we got here, both automatic methods failed but we gave instructions
+                console.log('Provided manual instructions for adding SAI token');
+                return { 
+                    success: false, 
+                    error: 'Automatic token addition failed, manual instructions provided',
+                    mintAddress
+                };
+            }
         } catch (error) {
             console.error('Error adding SAI token to Phantom wallet:', error);
+            
+            // Fallback to manual instructions
+            alert(`Please add the SAI token manually in Phantom wallet:\n\n` +
+                  `Token address: ${this.saiMint}\n` +
+                  `Decimals: ${SAI_DECIMALS}\n` +
+                  `Symbol: SAI\n` +
+                  `Network: Devnet`);
+                  
             return { success: false, error: error.message };
         }
     }
