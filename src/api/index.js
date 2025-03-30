@@ -4,32 +4,116 @@ import { Connection } from '@solana/web3.js';
 
 let solanaAPI = null;
 
-// Add this section for multiple RPC endpoints with fallback
+// Updated RPC endpoints list with free alternatives only
 const RPC_ENDPOINTS = {
   devnet: [
-    "https://api.devnet.solana.com",
-    "https://devnet.genesysgo.net",
-    "https://devnet.helius-rpc.com/?api-key=8475c5f5-e94b-4c4c-9997-05a3d531e786", // Example only, get your own API key
+    "https://api.devnet.solana.com", 
     "https://solana-devnet-rpc.publicnode.com",
+    "https://devnet.genesysgo.net",
+    "https://rpc.ankr.com/solana_devnet",
+    "https://devnet.clockwork.xyz",
+    "https://solana-devnet.runnode.com"
   ],
   mainnet: [
     "https://api.mainnet-beta.solana.com",
     "https://solana-mainnet-rpc.publicnode.com",
     "https://rpc.ankr.com/solana",
+    "https://solana.nima.enterprises"
   ]
 };
 
-// Function to create a connection with fallback
-async function createConnectionWithFallback(network = 'devnet', retryCount = 0) {
+// Store connection stats to improve endpoint selection
+const connectionStats = {
+  lastUsed: {},
+  successRates: {},
+  responseTimesMs: {},
+  rateLimitHits: {}
+};
+
+// Initialize stats for all endpoints
+for (const network in RPC_ENDPOINTS) {
+  RPC_ENDPOINTS[network].forEach(endpoint => {
+    connectionStats.lastUsed[endpoint] = 0;
+    connectionStats.successRates[endpoint] = 1; // Start optimistic
+    connectionStats.responseTimesMs[endpoint] = 500; // Default assumption
+    connectionStats.rateLimitHits[endpoint] = 0;
+  });
+}
+
+// Get next best endpoint based on rotation, success rates, and time since last use
+function getNextEndpoint(network = 'devnet') {
   const endpoints = RPC_ENDPOINTS[network] || RPC_ENDPOINTS.devnet;
+  const now = Date.now();
   
-  // Start with the default endpoint or cycle through available ones
-  const endpoint = endpoints[retryCount % endpoints.length];
+  // Calculate a score for each endpoint
+  const scoredEndpoints = endpoints.map(endpoint => {
+    const timeSinceLastUse = now - (connectionStats.lastUsed[endpoint] || 0);
+    const timeBonus = Math.min(timeSinceLastUse / 1000, 30); // Max 30 second bonus
+    const successRate = connectionStats.successRates[endpoint] || 0.5;
+    const responseTime = connectionStats.responseTimesMs[endpoint] || 1000;
+    const rateLimitPenalty = connectionStats.rateLimitHits[endpoint] * 10;
+    
+    // Higher score is better: prioritize success rate, time since last use, and fast response times
+    const score = (successRate * 100) + timeBonus - (responseTime / 100) - rateLimitPenalty;
+    
+    return { endpoint, score };
+  });
+  
+  // Sort by score descending
+  scoredEndpoints.sort((a, b) => b.score - a.score);
+  
+  // Mark as used
+  const selectedEndpoint = scoredEndpoints[0].endpoint;
+  connectionStats.lastUsed[selectedEndpoint] = now;
+  
+  console.log(`Selected RPC endpoint: ${selectedEndpoint} (score: ${scoredEndpoints[0].score.toFixed(2)})`);
+  return selectedEndpoint;
+}
+
+// Update endpoint stats after a request
+function updateEndpointStats(endpoint, success, responseTimeMs, wasRateLimit = false) {
+  // Update success rate using weighted average (recent results matter more)
+  const currentRate = connectionStats.successRates[endpoint] || 0.5;
+  connectionStats.successRates[endpoint] = currentRate * 0.7 + (success ? 0.3 : 0);
+  
+  // Update response time using weighted average
+  if (responseTimeMs && responseTimeMs > 0) {
+    const currentTime = connectionStats.responseTimesMs[endpoint] || 500;
+    connectionStats.responseTimesMs[endpoint] = currentTime * 0.7 + responseTimeMs * 0.3;
+  }
+  
+  // Track rate limit hits
+  if (wasRateLimit) {
+    connectionStats.rateLimitHits[endpoint] = (connectionStats.rateLimitHits[endpoint] || 0) + 1;
+    // Slowly decay rate limit hits over time
+    setTimeout(() => {
+      if (connectionStats.rateLimitHits[endpoint] > 0) {
+        connectionStats.rateLimitHits[endpoint]--;
+      }
+    }, 60000); // Reduce penalty after 1 minute
+  }
+}
+
+// Enhanced connection creation with endpoint rotation
+async function createConnectionWithFallback(network = 'devnet', retryCount = 0, usedEndpoints = []) {
+  // Get next best endpoint
+  const endpoint = getNextEndpoint(network);
+  
+  // Don't retry with the same endpoint too many times
+  if (usedEndpoints.includes(endpoint) && usedEndpoints.length < RPC_ENDPOINTS[network].length) {
+    console.log(`Already tried ${endpoint}, selecting another...`);
+    return createConnectionWithFallback(network, retryCount, usedEndpoints);
+  }
+  
+  // Track this attempt
+  const updatedUsedEndpoints = [...usedEndpoints, endpoint];
   
   console.log(`Creating connection to ${endpoint} (attempt ${retryCount + 1})`);
   
   try {
-    // Create a connection with custom confirmation params
+    const startTime = performance.now();
+    
+    // Create connection with optimized parameters
     const connection = new Connection(endpoint, {
       commitment: 'confirmed',
       confirmTransactionInitialTimeout: 60000, // 60 seconds
@@ -38,16 +122,37 @@ async function createConnectionWithFallback(network = 'devnet', retryCount = 0) 
     
     // Test the connection
     await connection.getVersion();
-    console.log(`Successfully connected to ${endpoint}`);
+    
+    const endTime = performance.now();
+    const responseTime = endTime - startTime;
+    
+    console.log(`Successfully connected to ${endpoint} in ${responseTime.toFixed(2)}ms`);
+    
+    // Store custom properties on the connection object
+    connection._endpoint = endpoint;
+    connection._network = network;
+    
+    // Update stats
+    updateEndpointStats(endpoint, true, responseTime);
+    
     return connection;
   } catch (error) {
-    console.error(`Failed to connect to ${endpoint}:`, error);
+    const isRateLimit = error.message?.includes('429') || 
+                        error.message?.includes('rate limit') || 
+                        error.message?.includes('Connection rate limits exceeded');
     
-    if (retryCount < endpoints.length * 2) {
+    console.error(`Failed to connect to ${endpoint}:`, error.message);
+    
+    // Update stats
+    updateEndpointStats(endpoint, false, null, isRateLimit);
+    
+    // Check if we should retry
+    if (retryCount < RPC_ENDPOINTS[network].length * 2) {
       console.log(`Falling back to next RPC endpoint...`);
       // Use exponential backoff
-      await new Promise(resolve => setTimeout(resolve, Math.min(1000 * (retryCount + 1), 10000)));
-      return createConnectionWithFallback(network, retryCount + 1);
+      const delay = Math.min(500 * (retryCount + 1), 10000);
+      await new Promise(resolve => setTimeout(resolve, delay));
+      return createConnectionWithFallback(network, retryCount + 1, updatedUsedEndpoints);
     } else {
       console.error('All RPC endpoints failed');
       throw new Error('Unable to connect to Solana network: All RPC endpoints failed');
@@ -55,7 +160,7 @@ async function createConnectionWithFallback(network = 'devnet', retryCount = 0) 
   }
 }
 
-// Export getConnection function that uses the fallback mechanism
+// Export getConnection function that uses the enhanced rotation mechanism
 export const getConnection = async (network = 'devnet') => {
   try {
     return await createConnectionWithFallback(network);
@@ -64,6 +169,23 @@ export const getConnection = async (network = 'devnet') => {
     throw error;
   }
 };
+
+// Make rotation system available globally
+if (typeof window !== 'undefined') {
+  window.solanaRpcSystem = {
+    getNextEndpoint,
+    updateEndpointStats,
+    getStats: () => ({ ...connectionStats }),
+    forceEndpoint: (endpoint) => {
+      if (RPC_ENDPOINTS.devnet.includes(endpoint) || RPC_ENDPOINTS.mainnet.includes(endpoint)) {
+        connectionStats.lastUsed[endpoint] = 0; // Reset last used time to prioritize this endpoint
+        connectionStats.successRates[endpoint] = 1; // Set high success rate
+        return true;
+      }
+      return false;
+    }
+  };
+}
 
 // Mock wallet connection function
 export const connectWallet = async () => {

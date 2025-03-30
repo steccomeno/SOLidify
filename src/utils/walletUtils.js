@@ -4,8 +4,9 @@
 import { useCallback } from 'react';
 import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
-import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
+import { Connection, PublicKey, clusterApiUrl, Keypair } from '@solana/web3.js';
 import { useWallet as useWalletAdapter } from '@solana/wallet-adapter-react';
+import { getConnection } from '../api';
 
 // Update the network configuration to ensure it's using Devnet
 const NETWORK = WalletAdapterNetwork.Devnet; // Use Devnet for development
@@ -13,12 +14,45 @@ console.log('Wallet configured for network:', NETWORK);
 const RPC_ENDPOINT = process.env.REACT_APP_SOLANA_RPC_HOST || clusterApiUrl(NETWORK);
 console.log('Using RPC endpoint:', RPC_ENDPOINT);
 
-// Create a connection to the Solana cluster
-export const connection = new Connection(RPC_ENDPOINT, {
-    commitment: 'confirmed',
-    confirmTransactionInitialTimeout: 60000
-});
-console.log('Solana connection established with endpoint:', RPC_ENDPOINT);
+// Replace the static connection with one that uses the rotation system
+let connection = null;
+
+// Initialize the connection using the rotation system
+export const initConnection = async () => {
+  try {
+    if (!connection) {
+      console.log('Initializing Solana connection with rotation system');
+      connection = await getConnection('devnet');
+      console.log('Connection initialized:', connection.rpcEndpoint);
+    }
+    return connection;
+  } catch (error) {
+    console.error('Error initializing connection:', error);
+    // Fallback to default connection if rotation system fails
+    console.log('Falling back to default connection');
+    connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
+    return connection;
+  }
+};
+
+// Function to refresh connection if needed (useful after rate limit errors)
+export const refreshConnection = async () => {
+  console.log('Refreshing Solana connection...');
+  connection = await getConnection('devnet');
+  console.log('Connection refreshed:', connection.rpcEndpoint);
+  return connection;
+};
+
+// Get the current connection or initialize if not available
+export const getActiveConnection = async () => {
+  if (!connection) {
+    return initConnection();
+  }
+  return connection;
+};
+
+// Override the connection object with these utility methods
+export { connection };
 
 // Add a function to check if the connection is active
 export const checkConnection = async () => {

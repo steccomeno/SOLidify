@@ -22,6 +22,7 @@ import {
 import LiquidationRiskIndicator from './LiquidationRiskIndicator';
 import SaiTransfer from './SaiTransfer';
 import './SaiInterface.css';
+import { refreshConnection } from '../utils/walletUtils';
 require('@solana/wallet-adapter-react-ui/styles.css');
 
 const SaiInterface = () => {
@@ -129,16 +130,16 @@ const SaiInterface = () => {
         return false;
     };
 
-    const initializeWalletAndLoadData = async () => {
+        const initializeWalletAndLoadData = async () => {
         console.log("SaiInterface - Initializing wallet and loading data");
         setWalletStatus('initializing');
         
         if (connected && wallet) {
-            try {
+                try {
                 console.log('SaiInterface - Wallet connected:', {
-                    connected,
-                    hasWallet: !!wallet,
-                    hasPublicKey: !!publicKey,
+                        connected,
+                        hasWallet: !!wallet,
+                        hasPublicKey: !!publicKey,
                     publicKeyStr: publicKey?.toString()
                 });
 
@@ -215,11 +216,11 @@ const SaiInterface = () => {
                     }
                 }
 
-                // Clear any existing errors
-                setError(null);
+                    // Clear any existing errors
+                    setError(null);
 
-                // Initialize API if not already initialized
-                if (!isAPIInitialized()) {
+                    // Initialize API if not already initialized
+                    if (!isAPIInitialized()) {
                     console.log('SaiInterface - API not initialized, initializing now...');
                     try {
                         await initializeAPI(wallet);
@@ -240,9 +241,9 @@ const SaiInterface = () => {
                 } else {
                     console.log('SaiInterface - API already initialized');
                     setWalletStatus('connected');
-                }
+                    }
 
-                // Load data only after API is initialized
+                    // Load data only after API is initialized
                 console.log('SaiInterface - Loading user data...');
                 try {
                     await Promise.all([
@@ -257,9 +258,9 @@ const SaiInterface = () => {
                     setError(`Failed to load user data: ${dataError.message}`);
                     return false;
                 }
-            } catch (error) {
+                } catch (error) {
                 console.error('SaiInterface - Failed to initialize:', error);
-                setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
+                    setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
                 setWalletStatus('error');
                 return false;
             }
@@ -492,7 +493,7 @@ const SaiInterface = () => {
             while (retryCount < 2) {
                 try {
                     result = await createCDP(collateral, sai);
-                    console.log('CDP creation result:', result);
+            console.log('CDP creation result:', result);
                     break; // If successful, exit the loop
                 } catch (error) {
                     console.error(`CDP creation attempt ${retryCount+1} failed:`, error);
@@ -535,15 +536,15 @@ const SaiInterface = () => {
             console.error('Error creating CDP:', error);
             let errorMessage = error.message;
             
-            // Make errors more user friendly
-            if (error.message.includes('rejected')) {
-                errorMessage = 'Transaction was rejected in your wallet.';
-            } else if (error.message.includes('blockhash')) {
-                errorMessage = 'Network error. Please try again in a moment.';
-            } else if (error.message.includes('timed out')) {
-                errorMessage = 'Transaction timed out. The network may be congested, please try again.';
-            } else if (error.message.includes('Unexpected error')) {
-                errorMessage = tryDiagnosePhantomError();
+            // Check for rate limit errors
+            if (error.message?.includes('429') || 
+                error.message?.includes('rate limit') || 
+                error.message?.includes('Connection rate limits exceeded')) {
+                
+                console.log('Rate limit detected in exception, refreshing connection...');
+                await refreshConnection();
+                
+                errorMessage = `Connection error: ${error.message} - Connection refreshed, please try again.`;
             }
             
             setError(errorMessage);
@@ -1167,12 +1168,12 @@ const SaiInterface = () => {
                                 <div className="balance-item">
                                     <span className="balance-label">SOL Balance:</span>
                                     <span className="balance-value">{walletBalance.sol.toFixed(4)} SOL</span>
-                                </div>
+                    </div>
                                 <div className="balance-item">
                                     <span className="balance-label">SAI Balance:</span>
                                     <span className="balance-value">{walletBalance.sai.toFixed(2)} SAI</span>
-                                </div>
-                                <button 
+                </div>
+                    <button 
                                     className="add-token-button"
                                     onClick={() => {
                                         if (window.solanaAPI) {
@@ -1193,25 +1194,25 @@ const SaiInterface = () => {
                                     }}
                                 >
                                     Add SAI to Phantom
-                                </button>
+                    </button>
                             </div>
                             <div className="wallet-address">
                                 <span>{publicKey.toString().substring(0, 4)}...{publicKey.toString().substring(publicKey.toString().length - 4)}</span>
                                 {walletStatus === 'error' && (
-                                    <button 
+                    <button 
                                         className="reconnect-button"
                                         onClick={attemptWalletReconnect}
                                         disabled={reconnectAttempts >= 3}
-                                    >
+                    >
                                         Reconnect
-                                    </button>
+                    </button>
                                 )}
                             </div>
                         </div>
                     )}
                 </div>
-            </div>
-            
+                </div>
+
             {connected && (
                 <div className="sai-tabs">
                     <button 
@@ -1269,14 +1270,14 @@ const SaiInterface = () => {
                 <div className="sai-main">
                     {loading && (
                         <div className="loading-overlay">
-                            <div className="loading-spinner"></div>
-                            <p>Loading...</p>
-                        </div>
+                        <div className="loading-spinner"></div>
+                        <p>Loading...</p>
+                    </div>
                     )}
                     
-                    {view === 'list' && renderCDPList()}
-                    {view === 'create' && renderCreateCDPForm()}
-                    {view === 'detail' && renderCDPDetail()}
+                        {view === 'list' && renderCDPList()}
+                        {view === 'create' && renderCreateCDPForm()}
+                        {view === 'detail' && renderCDPDetail()}
                     {view === 'transfer' && (
                         <SaiTransfer 
                             onSuccess={refreshWalletData} 
@@ -1284,7 +1285,7 @@ const SaiInterface = () => {
                         />
                     )}
                     {view === 'liquidations' && renderActiveLiquidations()}
-                </div>
+            </div>
             )}
 
             {publicKey && publicKey.toString() === '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1' && (
