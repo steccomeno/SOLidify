@@ -17,7 +17,8 @@ import {
     getAllActiveLiquidations,
     initializeAPI,
     isAPIInitialized,
-    mintTestSAI
+    mintTestSAI,
+    getTokenBalances
 } from '../api/index';
 import LiquidationRiskIndicator from './LiquidationRiskIndicator';
 import SaiTransfer from './SaiTransfer';
@@ -60,6 +61,8 @@ const SaiInterface = () => {
 
     const [retryAction, setRetryAction] = useState(null);
     const [initializing, setInitializing] = useState(false);
+
+    const [balances, setBalances] = useState({ sol: 0, sai: 0, sld: 0 });
 
     useEffect(() => {
         console.log("SaiInterface - Component mounted");
@@ -296,17 +299,37 @@ const SaiInterface = () => {
     }, [cdpDetails]);
 
     const loadUserCDPs = async () => {
+        setLoading(true);
         try {
-            setLoading(true);
             const result = await getUserCDPs();
-            if (result.success) {
+            
+            // Check if the result has success flag and data structure
+            if (result && result.success && result.data) {
                 setCdps(result.data);
+            } else if (result && Array.isArray(result)) {
+                // Handle old format for backward compatibility
+                setCdps(result);
+            } else if (result && !result.success) {
+                // Handle error response
+                setError({
+                    message: `Failed to load CDPs: ${result.error || 'Unknown error'}`,
+                    recoverable: true
+                });
+                // Set empty CDPs list
+                setCdps([]);
             } else {
-                setError(result.error || 'Failed to load CDPs');
+                // Fallback for unexpected response format
+                console.error('Unexpected response from getUserCDPs:', result);
+                setCdps([]);
             }
         } catch (error) {
-            setError('Failed to load CDPs');
-            console.error('Error loading CDPs:', error);
+            console.error('Error loading user CDPs:', error);
+            setError({
+                message: `Failed to load CDPs: ${error.message}`,
+                recoverable: true
+            });
+            // Set empty CDPs list
+            setCdps([]);
         } finally {
             setLoading(false);
         }
@@ -1281,6 +1304,56 @@ const SaiInterface = () => {
         );
     };
 
+    // Also fix the Dismiss button for the error message at the top
+    const ErrorMessage = ({ message, onDismiss }) => {
+        return (
+            <div className="error-message">
+                <p>{message}</p>
+                <button onClick={onDismiss}>Dismiss</button>
+            </div>
+        );
+    };
+
+    // Add a dismissError function somewhere in the component
+    const dismissError = () => {
+        setError(null);
+    };
+
+    // Add loadTokenBalances function
+    const loadTokenBalances = async () => {
+        try {
+            const result = await getTokenBalances();
+            
+            // Check if the result has success flag and data structure
+            if (result && result.success && result.data) {
+                setBalances(result.data);
+            } else if (result && typeof result.sol !== 'undefined') {
+                // Handle old format for backward compatibility
+                setBalances(result);
+            } else if (result && !result.success) {
+                // Handle error response
+                setError({
+                    message: `Failed to load balances: ${result.error || 'Unknown error'}`,
+                    recoverable: true
+                });
+                // Still set default balances
+                setBalances({ sol: 0, sai: 0, sld: 0 });
+            } else {
+                // Fallback for unexpected response format
+                console.error('Unexpected response from getTokenBalances:', result);
+                setBalances({ sol: 0, sai: 0, sld: 0 });
+            }
+        } catch (error) {
+            console.error('Error loading token balances:', error);
+            setError({
+                message: `Failed to load balances: ${error.message}`,
+                recoverable: true
+            });
+            // Still set default balances
+            setBalances({ sol: 0, sai: 0, sld: 0 });
+        }
+    };
+
     // Main render function
     return (
         <div className="sai-interface-container">
@@ -1371,14 +1444,11 @@ const SaiInterface = () => {
             )}
             
             {error && (
-                <div className="error-message">
-                    <p>{error}</p>
-                    <button onClick={() => setError(null)}>Dismiss</button>
-                    {error.includes('Wallet is not connected') && (
-                        <button onClick={attemptWalletReconnect}>
-                            Try Reconnecting
-                        </button>
-                    )}
+                <div className="error-container">
+                    <ErrorMessage 
+                        message={error} 
+                        onDismiss={dismissError} 
+                    />
                 </div>
             )}
             

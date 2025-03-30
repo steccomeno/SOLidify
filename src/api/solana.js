@@ -535,6 +535,15 @@ export class SolanaAPI {
 
     async getCDPInfo(cdpAddress) {
         try {
+            // Check if program was properly initialized
+            if (!this.program) {
+                console.log('Program not initialized, cannot fetch CDP info');
+                return {
+                    success: false,
+                    error: 'Program not initialized, try reconnecting your wallet'
+                };
+            }
+
             const cdp = await this.program.account.cdp.fetch(new PublicKey(cdpAddress));
             return {
                 success: true,
@@ -551,6 +560,15 @@ export class SolanaAPI {
 
     async getUserCDPs() {
         try {
+            // Check if program was properly initialized
+            if (!this.program) {
+                console.log('Program not initialized, returning empty CDP list');
+                return {
+                    success: true,
+                    data: []
+                };
+            }
+
             const cdps = await this.program.account.cdp.all([
                 {
                     memcmp: {
@@ -844,83 +862,71 @@ export class SolanaAPI {
     }
 
     async getTokenBalances() {
-        return this.handlePossibleRateLimit(async () => {
-            try {
-                if (!this.wallet || !this.wallet.publicKey) {
-                    console.warn('getTokenBalances: Wallet not connected');
-                    return { sol: 0, sai: 0 };
-                }
-
-                // Get SOL balance using retry logic
-                let solBalance = 0;
-                try {
-                    solBalance = await retryWithBackoff(async () => {
-                        return await this.connection.getBalance(this.wallet.publicKey);
-                    });
-                    console.log(`Raw SOL balance: ${solBalance} lamports, ${solBalance / LAMPORTS_PER_SOL} SOL`);
-                } catch (err) {
-                    console.error('Error getting SOL balance after retries:', err);
-                }
-                
-                // Get SAI token account or create it if it doesn't exist
-                let saiBalance = 0;
-                let tokenAccount;
-                
-                try {
-                    // Token details
-                    console.log(`Using SAI_MINT: ${this.saiMint}`);
-                    console.log(`User wallet: ${this.wallet.publicKey.toString()}`);
-                    
-                    // Get associated token account address
-                    tokenAccount = await getAssociatedTokenAddress(
-                        new PublicKey(this.saiMint),
-                        this.wallet.publicKey
-                    );
-                    
-                    console.log(`SAI token account address: ${tokenAccount.toString()}`);
-                    
-                    // Check if the token account exists - with retry
-                    try {
-                        const accountInfo = await retryWithBackoff(async () => {
-                            return await this.connection.getAccountInfo(tokenAccount);
-                        });
-                        
-                        if (accountInfo) {
-                            console.log('SAI token account exists, getting balance');
-                            // Use retry for getting account info as well
-                            const account = await retryWithBackoff(async () => {
-                                return await getAccount(this.connection, tokenAccount);
-                            });
-                            saiBalance = Number(account.amount) / Math.pow(10, SAI_DECIMALS);
-                            console.log(`Found SAI token account with ${saiBalance} SAI`);
-                        } else {
-                            console.log('SAI token account does not exist, will create it');
-                            
-                            // Create the token account directly without requiring user to add token to wallet
-                            await this.createTokenAccount(tokenAccount);
-                        }
-                    } catch (accountError) {
-                        console.log('Error checking token account, will create:', accountError);
-                        
-                        // Create the token account directly
-                        await this.createTokenAccount(tokenAccount);
-                    }
-                } catch (error) {
-                    console.error('Error in token account creation flow:', error);
-                }
-                
+        try {
+            // Check if connection is established
+            if (!this.connection) {
+                console.log('Connection not initialized, cannot fetch token balances');
                 return {
-                    sol: solBalance / LAMPORTS_PER_SOL,
-                    sai: saiBalance
-                };
-            } catch (error) {
-                console.error('Error getting token balances:', error);
-                return {
-                    sol: 0,
-                    sai: 0
+                    success: false,
+                    error: 'Connection not initialized'
                 };
             }
-        });
+
+            // We can still get SOL balance even if program isn't initialized
+            let solBalance = 0;
+            try {
+                solBalance = await this.connection.getBalance(this.wallet.publicKey);
+                solBalance = solBalance / LAMPORTS_PER_SOL;
+            } catch (error) {
+                console.error('Error fetching SOL balance:', error);
+            }
+
+            // Initialize with SOL balance which doesn't depend on program
+            const balances = {
+                sol: solBalance,
+                sai: 0,
+                sld: 0
+            };
+            
+            // Get token balances if possible
+            try {
+                // Try to get SAI token account
+                const saiTokenAccount = await this.findOrCreateAssociatedTokenAccount(
+                    this.wallet.publicKey,
+                    new PublicKey(SAI_MINT)
+                );
+                
+                if (saiTokenAccount) {
+                    const saiTokenInfo = await this.connection.getTokenAccountBalance(saiTokenAccount.address);
+                    balances.sai = saiTokenInfo.value.uiAmount;
+                }
+                
+                // Try to get SLD token account
+                const sldTokenAccount = await this.findOrCreateAssociatedTokenAccount(
+                    this.wallet.publicKey,
+                    new PublicKey(SLD_MINT)
+                );
+                
+                if (sldTokenAccount) {
+                    const sldTokenInfo = await this.connection.getTokenAccountBalance(sldTokenAccount.address);
+                    balances.sld = sldTokenInfo.value.uiAmount;
+                }
+            } catch (error) {
+                console.error('Error fetching token balances:', error);
+                // We still return the SOL balance even if token balances fail
+            }
+
+            return {
+                success: true,
+                data: balances
+            };
+        } catch (error) {
+            console.error('Error in getTokenBalances:', error);
+            return {
+                success: false,
+                error: error.message
+            };
+        }
     }
     
     async transferToken(recipientAddress, amount) {
@@ -1200,6 +1206,85 @@ export class SolanaAPI {
         } catch (error) {
             console.error('Error creating token account:', error);
             return false;
+        }
+    }
+
+    // Add findOrCreateAssociatedTokenAccount method
+    async findOrCreateAssociatedTokenAccount(owner, mint) {
+        try {
+            // Check if connection is established
+            if (!this.connection) {
+                console.log('Connection not initialized, cannot find/create token account');
+                return null;
+            }
+
+            // Get associated token address
+            const associatedTokenAddress = await getAssociatedTokenAddress(
+                mint,
+                owner
+            );
+            
+            console.log(`Token account address for ${mint.toString()}: ${associatedTokenAddress.toString()}`);
+            
+            // Check if the account exists
+            const accountInfo = await this.connection.getAccountInfo(associatedTokenAddress);
+            
+            if (accountInfo) {
+                console.log('Token account exists, returning address');
+                return {
+                    exists: true,
+                    address: associatedTokenAddress
+                };
+            }
+            
+            console.log('Token account does not exist, creating it');
+            
+            // Create the account
+            try {
+                const transaction = new Transaction().add(
+                    createAssociatedTokenAccountInstruction(
+                        this.wallet.publicKey, // payer
+                        associatedTokenAddress, // associated token account
+                        owner, // owner
+                        mint, // mint
+                    )
+                );
+                
+                // Setting recent blockhash and fee payer
+                transaction.feePayer = this.wallet.publicKey;
+                transaction.recentBlockhash = (await this.connection.getLatestBlockhash()).blockhash;
+                
+                // Sign and send the transaction
+                const signature = await this.wallet.signAndSendTransaction(transaction);
+                await this.connection.confirmTransaction(signature, 'confirmed');
+                
+                console.log(`Created token account: ${associatedTokenAddress.toString()}`);
+                
+                return {
+                    exists: false,
+                    created: true,
+                    address: associatedTokenAddress
+                };
+            } catch (createError) {
+                // If the creation fails (possibly due to race condition where account was just created)
+                console.error('Error creating token account:', createError);
+                
+                // Check if account exists now (it might have been created in another tab/transaction)
+                const accountInfo = await this.connection.getAccountInfo(associatedTokenAddress);
+                if (accountInfo) {
+                    console.log('Token account now exists (created elsewhere)');
+                    return {
+                        exists: true,
+                        address: associatedTokenAddress
+                    };
+                }
+                
+                // If account still doesn't exist, propagate the error
+                throw createError;
+            }
+        } catch (error) {
+            console.error('Error in findOrCreateAssociatedTokenAccount:', error);
+            return null;
         }
     }
 } 

@@ -501,7 +501,25 @@ export const getUserCDPs = async () => {
     if (!solanaAPI) {
         throw new Error('API not initialized. Please connect your wallet first.');
     }
-    return await solanaAPI.getUserCDPs();
+    
+    // Handle case where program failed to initialize
+    if (!solanaAPI.program) {
+        console.warn('Program not initialized, returning empty CDP list');
+        return {
+            success: true,
+            data: []
+        };
+    }
+    
+    try {
+        return await solanaAPI.getUserCDPs();
+    } catch (error) {
+        console.error('Error fetching user CDPs:', error);
+        return {
+            success: false,
+            error: error.message || 'Failed to fetch user CDPs'
+        };
+    }
 };
 
 export const getCDPInfo = async (cdpAddress) => {
