@@ -734,9 +734,8 @@ export const getTokenBalances = async () => {
 };
 
 // Keep only one export list
-// Remove initialize from this export list since it's already exported earlier
+// Remove both initialize and getConnection since they're already exported earlier
 export {
-    getConnection,
     connectWallet,
     getWalletBalance,
     getUserCDPs,
