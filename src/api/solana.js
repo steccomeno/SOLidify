@@ -291,20 +291,9 @@ export class SolanaAPI {
                 ownerSai: ownerSai.toString()
             });
 
-            console.log('Using alternative direct approach for Phantom wallet...');
-            
-            // Instead of creating a transaction and trying to send it through the wallet adapter
-            // We'll directly invoke window.solana methods that we know work
-            
+            // Much simpler approach - use wallet.sendTransaction
             try {
-                if (!window.solana || !window.solana.isPhantom) {
-                    throw new Error('Phantom wallet not detected');
-                }
-                
-                if (!window.solana.isConnected) {
-                    console.log('Phantom wallet not connected, attempting to connect...');
-                    await window.solana.connect();
-                }
+                console.log('Using simplified direct approach...');
                 
                 // Check if SAI token account exists, create if needed
                 let needsTokenAccount = false;
@@ -361,7 +350,7 @@ export class SolanaAPI {
                 transaction.add(initCdpIx);
                 
                 // Get a fresh blockhash
-                const { blockhash } = await this.connection.getLatestBlockhash('finalized');
+                const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
                 transaction.recentBlockhash = blockhash;
                 
                 console.log('Transaction prepared:', {
@@ -370,18 +359,36 @@ export class SolanaAPI {
                     signers: [this.wallet.publicKey.toString()]
                 });
                 
-                // Use the direct window.solana method
-                console.log('Sending transaction directly to Phantom...');
+                // Try standard wallet method first
+                console.log('Sending transaction via wallet.sendTransaction...');
+                let signature;
                 
-                // This method actually works much better with Phantom
-                // It handles both signing and sending
-                const { signature } = await window.solana.signAndSendTransaction(transaction);
+                try {
+                    signature = await this.wallet.sendTransaction(transaction, this.connection);
+                    console.log('Transaction sent with signature:', signature);
+                } catch (walletSendError) {
+                    console.error('Error with wallet.sendTransaction:', walletSendError);
+                    
+                    // If the standard approach fails, try direct Phantom API
+                    if (window.solana && window.solana.isPhantom) {
+                        console.log('Trying direct Phantom signAndSendTransaction...');
+                        const phantomResponse = await window.solana.signAndSendTransaction(transaction);
+                        signature = phantomResponse.signature;
+                        console.log('Transaction sent via Phantom API:', signature);
+                    } else {
+                        throw walletSendError;
+                    }
+                }
                 
-                console.log('Transaction sent with signature:', signature);
                 console.log('Waiting for confirmation...');
                 
                 // Wait for confirmation
-                const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
+                const confirmation = await this.connection.confirmTransaction({
+                    signature, 
+                    blockhash, 
+                    lastValidBlockHeight
+                }, 'confirmed');
+                
                 console.log('Transaction confirmed:', confirmation);
                 
                 return {
@@ -390,93 +397,104 @@ export class SolanaAPI {
                     signature
                 };
                 
-            } catch (directError) {
-                console.error('Error with direct Phantom approach:', directError);
+            } catch (error) {
+                console.error('Error creating CDP:', error);
                 
-                if (directError.message.includes('User rejected')) {
+                if (error.message.includes('User rejected')) {
                     return {
                         success: false,
                         error: 'Transaction was cancelled by the user'
                     };
                 }
                 
-                // If direct approach failed, try another way
-                console.log('Trying alternative approach...');
-                
-                try {
-                    // Create transaction from scratch
-                    const transaction = new Transaction();
-                    transaction.feePayer = this.wallet.publicKey;
-                    
-                    // Add token account creation if needed
-                    let needsTokenAccount = false;
+                if (window.solana && typeof window.solana.signTransaction === 'function') {
+                    // Try one last method as a fallback
                     try {
-                        await getAccount(this.connection, ownerSai);
-                    } catch (error) {
-                        needsTokenAccount = true;
+                        console.log('Trying manual sign and send approach...');
+                        
+                        // Create a new transaction
+                        const transaction = new Transaction();
+                        
+                        // Add token account creation if needed
+                        let needsTokenAccount = false;
+                        try {
+                            await getAccount(this.connection, ownerSai);
+                        } catch (error) {
+                            needsTokenAccount = true;
+                            transaction.add(
+                                createAssociatedTokenAccountInstruction(
+                                    this.wallet.publicKey,
+                                    ownerSai,
+                                    this.wallet.publicKey,
+                                    SAI_MINT
+                                )
+                            );
+                        }
+                        
+                        // Add CDP initialization instruction
                         transaction.add(
-                            createAssociatedTokenAccountInstruction(
-                                this.wallet.publicKey,
-                                ownerSai,
-                                this.wallet.publicKey,
-                                SAI_MINT
-                            )
+                            await this.program.methods
+                                .initializeCdp(
+                                    new BN(collateralLamports),
+                                    new BN(saiRawAmount)
+                                )
+                                .accounts({
+                                    owner: this.wallet.publicKey,
+                                    cdp,
+                                    ownerCollateral,
+                                    collateralMint: SOL_MINT,
+                                    vault,
+                                    vaultAuthority,
+                                    saiMint: SAI_MINT,
+                                    ownerSai,
+                                    mintAuthority,
+                                    tokenProgram: TOKEN_PROGRAM_ID,
+                                    systemProgram: SystemProgram.programId,
+                                    rent: SYSVAR_RENT_PUBKEY,
+                                })
+                                .instruction()
                         );
+                        
+                        // Get fresh blockhash
+                        const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
+                        transaction.recentBlockhash = blockhash;
+                        transaction.feePayer = this.wallet.publicKey;
+                        
+                        // Sign transaction with Phantom directly
+                        const signedTx = await window.solana.signTransaction(transaction);
+                        console.log('Transaction signed manually');
+                        
+                        // Send the signed transaction
+                        const signature = await this.connection.sendRawTransaction(
+                            signedTx.serialize(),
+                            {
+                                skipPreflight: false,
+                                preflightCommitment: 'confirmed'
+                            }
+                        );
+                        
+                        console.log('Manually signed transaction sent with signature:', signature);
+                        
+                        // Wait for confirmation
+                        const confirmation = await this.connection.confirmTransaction({
+                            signature, 
+                            blockhash, 
+                            lastValidBlockHeight
+                        }, 'confirmed');
+                        
+                        console.log('Transaction confirmed:', confirmation);
+                        
+                        return {
+                            success: true,
+                            cdpAddress: cdp.toString(),
+                            signature
+                        };
+                    } catch (manualError) {
+                        console.error('Manual signing and sending failed:', manualError);
+                        throw manualError;
                     }
-                    
-                    // Add CDP initialization instruction
-                    transaction.add(
-                        await this.program.methods
-                            .initializeCdp(
-                                new BN(collateralLamports),
-                                new BN(saiRawAmount)
-                            )
-                            .accounts({
-                                owner: this.wallet.publicKey,
-                                cdp,
-                                ownerCollateral,
-                                collateralMint: SOL_MINT,
-                                vault,
-                                vaultAuthority,
-                                saiMint: SAI_MINT,
-                                ownerSai,
-                                mintAuthority,
-                                tokenProgram: TOKEN_PROGRAM_ID,
-                                systemProgram: SystemProgram.programId,
-                                rent: SYSVAR_RENT_PUBKEY,
-                            })
-                            .instruction()
-                    );
-                    
-                    // Use a simpler, more direct approach with the connection and wallet
-                    const { blockhash } = await this.connection.getRecentBlockhash();
-                    transaction.recentBlockhash = blockhash;
-                    
-                    // For Phantom, serialize the transaction to ensure correct format
-                    const serializedTx = transaction.serializeMessage();
-                    console.log('Serialized transaction:', Buffer.from(serializedTx).toString('base64'));
-                    
-                    // Use window.solana for simpler signing
-                    const { signature } = await window.solana.request({
-                        method: 'signAndSendTransaction',
-                        params: {
-                            message: Buffer.from(serializedTx).toString('base64'),
-                        },
-                    });
-                    
-                    console.log('Transaction sent via fallback with signature:', signature);
-                    
-                    const confirmation = await this.connection.confirmTransaction(signature);
-                    console.log('Transaction confirmed:', confirmation);
-                    
-                    return {
-                        success: true,
-                        cdpAddress: cdp.toString(),
-                        signature
-                    };
-                } catch (fallbackError) {
-                    console.error('Fallback approach failed:', fallbackError);
-                    throw fallbackError;
+                } else {
+                    throw error;
                 }
             }
         } catch (error) {
