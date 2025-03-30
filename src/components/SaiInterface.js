@@ -157,7 +157,18 @@ const SaiInterface = () => {
                             connected: true,
                             // If wallet lacks signTransaction, use the one from Phantom
                             signTransaction: wallet.signTransaction || 
-                                ((tx) => window.solana.signTransaction(tx))
+                                ((tx) => window.solana.signTransaction(tx)),
+                            // Also add the sendTransaction method which is needed for most operations
+                            sendTransaction: wallet.sendTransaction || 
+                                ((tx, connection, options) => {
+                                    console.log('Using patched sendTransaction from Phantom');
+                                    return window.solana.signAndSendTransaction ? 
+                                        window.solana.signAndSendTransaction(tx) : 
+                                        window.solana.sendTransaction(tx);
+                                }),
+                            // Add signAllTransactions for completeness
+                            signAllTransactions: wallet.signAllTransactions ||
+                                ((txs) => window.solana.signAllTransactions(txs))
                         };
                         
                         console.log('SaiInterface - Created patched wallet with publicKey:', 

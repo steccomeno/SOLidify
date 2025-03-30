@@ -57,10 +57,14 @@ export class SolanaAPI {
             throw new Error('Wallet public key is not available');
         }
         
-        console.log('Wallet object:', {
+        // Patch the wallet with methods from window.solana if they're missing
+        this.patchWalletMethods(wallet);
+        
+        console.log('Wallet object after patching:', {
             connected: wallet.connected,
             publicKey: wallet.publicKey.toString(),
-            hasSignTransaction: typeof wallet.signTransaction === 'function'
+            hasSignTransaction: typeof wallet.signTransaction === 'function',
+            hasSendTransaction: typeof wallet.sendTransaction === 'function'
         });
         
         this.connection = connection;
@@ -90,6 +94,77 @@ export class SolanaAPI {
         }
         
         console.log('SAI_MINT being used:', SAI_MINT.toString());
+    }
+
+    // Add a new method to patch wallet methods
+    patchWalletMethods(wallet) {
+        // Check and patch signTransaction
+        if (!wallet.signTransaction || typeof wallet.signTransaction !== 'function') {
+            if (window.solana && typeof window.solana.signTransaction === 'function') {
+                console.log('Patching wallet.signTransaction with window.solana.signTransaction');
+                wallet.signTransaction = (...args) => window.solana.signTransaction(...args);
+            } else {
+                console.error('No signTransaction method available in window.solana');
+            }
+        }
+        
+        // Check and patch sendTransaction
+        if (!wallet.sendTransaction || typeof wallet.sendTransaction !== 'function') {
+            if (window.solana && typeof window.solana.signAndSendTransaction === 'function') {
+                console.log('Patching wallet.sendTransaction with window.solana.signAndSendTransaction');
+                wallet.sendTransaction = (...args) => window.solana.signAndSendTransaction(...args);
+            } else if (window.solana && typeof window.solana.sendTransaction === 'function') {
+                console.log('Patching wallet.sendTransaction with window.solana.sendTransaction');
+                wallet.sendTransaction = (...args) => window.solana.sendTransaction(...args);
+            } else {
+                // Create a custom sendTransaction that uses signTransaction and our connection
+                console.log('Creating custom sendTransaction method using signTransaction');
+                wallet.sendTransaction = async (transaction, connection, options = {}) => {
+                    console.log('Custom sendTransaction called with transaction:', transaction);
+                    try {
+                        // Sign the transaction
+                        const signedTx = await wallet.signTransaction(transaction);
+                        console.log('Transaction signed successfully');
+                        
+                        // Send the signed transaction
+                        const signature = await this.connection.sendRawTransaction(
+                            signedTx.serialize(),
+                            options
+                        );
+                        console.log('Transaction sent with signature:', signature);
+                        
+                        // Confirm the transaction if requested
+                        if (options.skipPreflight !== true) {
+                            const confirmation = await this.connection.confirmTransaction(
+                                signature,
+                                options.commitment || 'confirmed'
+                            );
+                            console.log('Transaction confirmed:', confirmation);
+                        }
+                        
+                        return signature;
+                    } catch (error) {
+                        console.error('Error in custom sendTransaction:', error);
+                        throw error;
+                    }
+                };
+            }
+        }
+        
+        // Check and patch signAllTransactions
+        if (!wallet.signAllTransactions || typeof wallet.signAllTransactions !== 'function') {
+            if (window.solana && typeof window.solana.signAllTransactions === 'function') {
+                console.log('Patching wallet.signAllTransactions with window.solana.signAllTransactions');
+                wallet.signAllTransactions = (...args) => window.solana.signAllTransactions(...args);
+            } else {
+                // Create a fallback that uses signTransaction for each
+                console.log('Creating fallback signAllTransactions using signTransaction');
+                wallet.signAllTransactions = async (transactions) => {
+                    console.log(`Signing ${transactions.length} transactions individually`);
+                    return Promise.all(transactions.map(tx => wallet.signTransaction(tx)));
+                };
+            }
+        }
     }
 
     async createCDP(collateralAmount, saiAmount) {
