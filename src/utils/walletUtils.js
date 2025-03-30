@@ -11,44 +11,94 @@ import { getConnection } from '../api';
 // Update the network configuration to ensure it's using Devnet
 const NETWORK = WalletAdapterNetwork.Devnet; // Use Devnet for development
 console.log('Wallet configured for network:', NETWORK);
-const RPC_ENDPOINT = process.env.REACT_APP_SOLANA_RPC_HOST || clusterApiUrl(NETWORK);
-console.log('Using RPC endpoint:', RPC_ENDPOINT);
 
-// Replace the static connection with one that uses the rotation system
+// Define RPC endpoints with fallbacks
+const RPC_ENDPOINTS = [
+    'https://api.devnet.solana.com',
+    'https://rpc.ankr.com/solana_devnet',
+    'https://mango.devnet.rpcpool.com'
+];
+
+let currentEndpointIndex = 0;
 let connection = null;
+let lastConnectionAttempt = 0;
+const CONNECTION_RETRY_DELAY = 1000; // 1 second
 
-// Initialize the connection using the rotation system
-export const initConnection = async () => {
-  try {
-    if (!connection) {
-      console.log('Initializing Solana connection with rotation system');
-      connection = await getConnection('devnet');
-      console.log('Connection initialized:', connection.rpcEndpoint);
+async function testConnection(conn) {
+    try {
+        // Use getVersion instead of getSlot for connection testing
+        const version = await conn.getVersion();
+        return version !== null;
+    } catch (error) {
+        console.error('Connection test failed:', error);
+        return false;
     }
-    return connection;
-  } catch (error) {
-    console.error('Error initializing connection:', error);
-    // Fallback to default connection if rotation system fails
-    console.log('Falling back to default connection');
-    connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
-    return connection;
-  }
-};
+}
 
-// Function to refresh connection if needed (useful after rate limit errors)
-export const refreshConnection = async () => {
-  console.log('Refreshing Solana connection...');
-  connection = await getConnection('devnet');
-  console.log('Connection refreshed:', connection.rpcEndpoint);
-  return connection;
-};
+export function rotateEndpoint() {
+    currentEndpointIndex = (currentEndpointIndex + 1) % RPC_ENDPOINTS.length;
+    const endpoint = RPC_ENDPOINTS[currentEndpointIndex];
+    console.log('Rotating to RPC endpoint:', endpoint);
+    return endpoint;
+}
 
-// Get the current connection or initialize if not available
-export const getActiveConnection = async () => {
-  if (!connection) {
-    return initConnection();
-  }
-  return connection;
+export async function getActiveConnection() {
+    // If we have a recent connection that works, return it
+    if (connection) {
+        try {
+            const isWorking = await testConnection(connection);
+            if (isWorking) {
+                return connection;
+            }
+        } catch (error) {
+            console.error('Error testing existing connection:', error);
+        }
+    }
+
+    // Try each endpoint until we find one that works
+    for (let attempts = 0; attempts < RPC_ENDPOINTS.length; attempts++) {
+        const endpoint = RPC_ENDPOINTS[currentEndpointIndex];
+        console.log('Attempting connection to:', endpoint);
+
+        try {
+            const newConnection = new Connection(endpoint, 'confirmed');
+            const isWorking = await testConnection(newConnection);
+            
+            if (isWorking) {
+                connection = newConnection;
+                lastConnectionAttempt = Date.now();
+                return connection;
+            }
+        } catch (error) {
+            console.error('Connection attempt failed:', error);
+        }
+
+        // Rotate to next endpoint
+        rotateEndpoint();
+        
+        // Add a small delay between attempts
+        await new Promise(resolve => setTimeout(resolve, CONNECTION_RETRY_DELAY));
+    }
+
+    throw new Error('Failed to establish connection to any RPC endpoint');
+}
+
+// Function to get the current network
+export function getNetwork() {
+    return 'devnet';
+}
+
+// Initialize wallet configuration
+export function initializeWallet() {
+    console.log('Wallet configured for network:', getNetwork());
+    return clusterApiUrl('devnet');
+}
+
+// Export the connection pool for direct access if needed
+export const connectionPool = {
+    endpoints: RPC_ENDPOINTS,
+    getCurrentEndpoint: () => RPC_ENDPOINTS[currentEndpointIndex],
+    getConnection: () => connection,
 };
 
 // Override the connection object with these utility methods
@@ -271,10 +321,17 @@ export const useWallet = () => {
   };
 };
 
+// Function to refresh connection
+export async function refreshConnection() {
+    connection = null;
+    return getActiveConnection();
+}
+
 export default {
   useWallet,
   connection,
   isWalletConnected,
   connectWallet,
-  getWalletBalance
+  getWalletBalance,
+  refreshConnection
 }; 

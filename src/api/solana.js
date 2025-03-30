@@ -1,11 +1,15 @@
-import { Program, AnchorProvider } from '@project-serum/anchor';
+import { Program, AnchorProvider, setProvider } from '@project-serum/anchor';
 import { PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, LAMPORTS_PER_SOL } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createTransferInstruction } from '@solana/spl-token';
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createTransferInstruction, createInitializeMintInstruction, MINT_SIZE, getMinimumBalanceForRentExemptMint } from '@solana/spl-token';
 import BN from 'bn.js';
 import saiIDL from '../idl/sai.json';
 import tokenInfo from '../scripts/sai_token_info.json';
 import { Keypair } from '@solana/web3.js';
-import { getActiveConnection, refreshConnection } from '../utils/walletUtils';
+import { 
+    getActiveConnection, 
+    refreshConnection,
+    connection as baseConnection 
+} from '../utils/walletUtils';
 
 // Rate limiting and retry utilities
 const RETRY_DELAY = 1000; // 1 second
@@ -66,20 +70,152 @@ console.log('Token Info Loaded:', {
     adminAddress: tokenInfo.admin
 });
 
+// Store the mint keypair in memory
+let saiMintKeypair = null;
+
+export async function initializeSAIMint(walletAdapter) {
+    try {
+        const connection = await getActiveConnection();
+        
+        // Generate mint keypair if not already created
+        if (!saiMintKeypair) {
+            saiMintKeypair = Keypair.generate();
+            console.log('Generated new SAI mint keypair:', saiMintKeypair.publicKey.toBase58());
+        }
+
+        // Check if mint already exists
+        const mintInfo = await connection.getAccountInfo(saiMintKeypair.publicKey);
+        if (mintInfo) {
+            console.log('SAI mint already exists:', saiMintKeypair.publicKey.toBase58());
+            return saiMintKeypair.publicKey;
+        }
+
+        console.log('Creating new SAI mint account...');
+        
+        // Get minimum lamports for rent exemption
+        const lamports = await getMinimumBalanceForRentExemptMint(connection);
+        
+        // Create transaction for mint account
+        const transaction = new Transaction().add(
+            SystemProgram.createAccount({
+                fromPubkey: walletAdapter.publicKey,
+                newAccountPubkey: saiMintKeypair.publicKey,
+                space: MINT_SIZE,
+                lamports,
+                programId: TOKEN_PROGRAM_ID,
+            }),
+            createInitializeMintInstruction(
+                saiMintKeypair.publicKey,
+                9, // 9 decimals
+                walletAdapter.publicKey,
+                walletAdapter.publicKey,
+                TOKEN_PROGRAM_ID
+            )
+        );
+
+        // Get latest blockhash
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = walletAdapter.publicKey;
+
+        // Sign with both wallet and mint keypair
+        transaction.sign(saiMintKeypair);
+        const signedTx = await walletAdapter.signTransaction(transaction);
+
+        // Send and confirm transaction
+        const signature = await connection.sendRawTransaction(signedTx.serialize());
+        await connection.confirmTransaction(signature, 'confirmed');
+
+        console.log('SAI mint initialized successfully:', saiMintKeypair.publicKey.toBase58());
+        console.log('Transaction signature:', signature);
+
+        return saiMintKeypair.publicKey;
+    } catch (error) {
+        console.error('Failed to initialize SAI mint:', error);
+        throw error;
+    }
+}
+
+export async function findOrCreateAssociatedTokenAccount(mintPubKey, ownerPubKey) {
+    try {
+        const connection = await getActiveConnection();
+
+        // If this is the SAI mint and it doesn't exist yet, initialize it
+        if (mintPubKey.equals(saiMintKeypair?.publicKey)) {
+            await initializeSAIMint(walletAdapter);
+        }
+
+        // Get the associated token address
+        const associatedTokenAddress = await getAssociatedTokenAddress(
+            mintPubKey,
+            ownerPubKey,
+            false,
+            TOKEN_PROGRAM_ID,
+            ASSOCIATED_TOKEN_PROGRAM_ID
+        );
+
+        // Check if account exists
+        const tokenAccount = await connection.getAccountInfo(associatedTokenAddress);
+        if (tokenAccount) {
+            console.log('Token account exists:', associatedTokenAddress.toBase58());
+            return associatedTokenAddress;
+        }
+
+        console.log('Creating associated token account...');
+        
+        // Create the account
+        const transaction = new Transaction().add(
+            createAssociatedTokenAccountInstruction(
+                ownerPubKey,
+                associatedTokenAddress,
+                ownerPubKey,
+                mintPubKey,
+                TOKEN_PROGRAM_ID,
+                ASSOCIATED_TOKEN_PROGRAM_ID
+            )
+        );
+
+        // Get latest blockhash
+        const { blockhash } = await connection.getLatestBlockhash();
+        transaction.recentBlockhash = blockhash;
+        transaction.feePayer = ownerPubKey;
+
+        // Sign and send transaction
+        const signedTx = await walletAdapter.signTransaction(transaction);
+        const signature = await connection.sendRawTransaction(signedTx.serialize());
+        await connection.confirmTransaction(signature, 'confirmed');
+
+        console.log('Associated token account created:', associatedTokenAddress.toBase58());
+        console.log('Transaction signature:', signature);
+
+        return associatedTokenAddress;
+    } catch (error) {
+        console.error('Failed to find or create associated token account:', error);
+        throw error;
+    }
+}
+
 export class SolanaAPI {
-    constructor(wallet, programIDStr) {
-        this.programId = new PublicKey(programIDStr || PROGRAM_ID);
+    constructor(wallet, programId = PROGRAM_ID) {
+        if (!wallet || !wallet.publicKey) {
+            throw new Error('Wallet adapter with public key is required');
+        }
+
         this.wallet = wallet;
+        this.programId = programId instanceof PublicKey ? programId : new PublicKey(programId);
+        this.connection = null;
         this.provider = null;
         this.program = null;
+        this.initialized = false;
         
         // Load token addresses from token info
         this.saiMint = tokenInfo.saiMint;
         this.sldMint = tokenInfo.sldMint;
         this.admin = tokenInfo.admin;
         
-        console.log('SolanaAPI initialized with:', {
+        console.log('SolanaAPI constructed with:', {
             programId: this.programId.toString(),
+            walletPublicKey: this.wallet.publicKey.toString(),
             saiMint: this.saiMint,
             sldMint: this.sldMint,
             admin: this.admin
@@ -96,12 +232,19 @@ export class SolanaAPI {
             } else {
                 // Test if the existing connection is still working
                 try {
-                    // Use a simple method to test connection
+                    const start = Date.now();
                     await this.connection.getVersion();
-                    console.log('Existing connection is working');
+                    const latency = Date.now() - start;
+                    
+                    // If latency is too high, refresh the connection
+                    if (latency > 5000) {
+                        console.log('Connection latency too high, refreshing connection');
+                        this.connection = await refreshConnection();
+                    } else {
+                        console.log('Existing connection is working with acceptable latency');
+                    }
                 } catch (testError) {
                     console.error('Existing connection failed test, refreshing:', testError.message);
-                    // If the connection test fails, refresh it
                     this.connection = await refreshConnection();
                 }
             }
@@ -113,19 +256,7 @@ export class SolanaAPI {
             return this.connection;
         } catch (error) {
             console.error('Error ensuring connection:', error);
-            
-            // If we get here, both getActiveConnection and refreshConnection failed
-            // Try one last fallback to the default RPC endpoint
-            try {
-                console.log('Attempting emergency fallback to default RPC endpoint');
-                // Import Connection directly to avoid circular dependency
-                const { Connection } = require('@solana/web3.js');
-                this.connection = new Connection('https://api.devnet.solana.com', 'confirmed');
-                return this.connection;
-            } catch (fallbackError) {
-                console.error('Emergency fallback failed:', fallbackError);
-                throw error; // Throw the original error
-            }
+            throw error;
         }
     }
 
@@ -165,169 +296,56 @@ export class SolanaAPI {
     async initialize() {
         try {
             if (!this.wallet || !this.wallet.publicKey) {
-                console.error('Initialize failed: Wallet not connected or missing public key');
-                throw new Error('Wallet not connected');
+                throw new Error('Wallet not connected or missing public key');
             }
-            
-            // Ensure we have a connection
+
+            console.log('Initializing SolanaAPI with wallet:', {
+                publicKey: this.wallet.publicKey.toString(),
+                hasSignTransaction: typeof this.wallet.signTransaction === 'function',
+                hasSignAllTransactions: typeof this.wallet.signAllTransactions === 'function',
+                hasSendTransaction: typeof this.wallet.sendTransaction === 'function'
+            });
+
             console.log('Ensuring connection is available...');
             await this.ensureConnection();
-            console.log('Connection confirmed');
             
-            // Create provider with current wallet
             console.log('Creating AnchorProvider with wallet:', this.wallet.publicKey.toString());
-            const walletAdapterConnected = {
-                publicKey: this.wallet.publicKey,
-                signTransaction: this.wallet.signTransaction,
-                signAllTransactions: this.wallet.signAllTransactions,
-            };
-
-            // Create the provider
             this.provider = new AnchorProvider(
                 this.connection,
-                walletAdapterConnected,
-                { preflightCommitment: 'confirmed' }
+                this.wallet,
+                { 
+                    commitment: 'confirmed',
+                    preflightCommitment: 'confirmed',
+                    skipPreflight: false
+                }
             );
             console.log('AnchorProvider created successfully');
+
+            // Set the provider globally
+            setProvider(this.provider);
+            console.log('Provider set globally');
+
+            // Create the program instance
+            console.log('Creating program instance with IDL...');
+            this.program = new Program(saiIDL, this.programId, this.provider);
             
-            // Load the IDL from the program
-            console.log('Loading program IDL from program ID:', this.programId.toString());
-            try {
-                const idl = await Program.fetchIdl(this.programId, this.provider);
-                
-                if (!idl) {
-                    console.error('IDL fetch returned null or undefined');
-                    throw new Error('Failed to load IDL: No data returned');
-                }
-                
-                console.log('IDL loaded successfully:', {
-                    name: idl.name,
-                    instructions: idl.instructions?.length || 0,
-                    accounts: idl.accounts?.length || 0,
-                    version: idl.version
-                });
-                
-                // Create the program instance
-                this.program = new Program(idl, this.programId, this.provider);
-                console.log('Program initialized with IDL');
-                
-                return true;
-            } catch (idlError) {
-                console.error('Error fetching IDL:', idlError);
-                
-                // Try with a small delay and retry
-                console.log('Retrying IDL fetch after a short delay...');
-                await new Promise(resolve => setTimeout(resolve, 2000));
-                
-                try {
-                    const idl = await Program.fetchIdl(this.programId, this.provider);
-                    if (!idl) {
-                        throw new Error('Failed to load IDL on retry');
-                    }
-                    
-                    this.program = new Program(idl, this.programId, this.provider);
-                    console.log('Program initialized with IDL on retry');
-                    return true;
-                } catch (retryError) {
-                    console.error('IDL fetch retry failed:', retryError);
-                    
-                    // Fall back to using a static IDL if available
-                    console.log('Attempting to use static IDL as fallback...');
-                    try {
-                        // Static IDL from a local copy
-                        const staticIdl = {
-                            version: "0.1.0",
-                            name: "sai",
-                            instructions: [
-                                {
-                                    name: "initializeCdp",
-                                    accounts: [
-                                        { name: "owner", isMut: true, isSigner: true },
-                                        { name: "cdp", isMut: true, isSigner: true },
-                                        { name: "ownerCollateral", isMut: true, isSigner: false },
-                                        { name: "collateralMint", isMut: false, isSigner: false },
-                                        { name: "vault", isMut: true, isSigner: false },
-                                        { name: "vaultAuthority", isMut: false, isSigner: false },
-                                        { name: "saiMint", isMut: true, isSigner: false },
-                                        { name: "ownerSai", isMut: true, isSigner: false },
-                                        { name: "mintAuthority", isMut: false, isSigner: false },
-                                        { name: "tokenProgram", isMut: false, isSigner: false },
-                                        { name: "systemProgram", isMut: false, isSigner: false },
-                                        { name: "rent", isMut: false, isSigner: false }
-                                    ],
-                                    args: [
-                                        { name: "collateralAmount", type: "u64" },
-                                        { name: "saiAmount", type: "u64" }
-                                    ]
-                                }
-                            ],
-                            accounts: [],
-                            errors: []
-                        };
-                        
-                        this.program = new Program(staticIdl, this.programId, this.provider);
-                        console.log('Program initialized with static IDL fallback');
-                        return true;
-                    } catch (fallbackError) {
-                        console.error('Static IDL fallback failed:', fallbackError);
-                        throw new Error(`Failed to initialize program: ${fallbackError.message}`);
-                    }
-                }
+            if (!this.program) {
+                throw new Error('Failed to create program instance');
             }
+            
+            console.log('Program instance created successfully:', {
+                programId: this.program.programId.toString(),
+                provider: this.program.provider.wallet.publicKey.toString()
+            });
+
+            this.initialized = true;
+            console.log('SolanaAPI initialization complete');
+            
+            return true;
         } catch (error) {
-            console.error('Error initializing Solana API:', error);
-            
-            // Provide a more descriptive error message
-            let errorMessage = `Program initialization failed: ${error.message}`;
-            
-            if (error.message?.includes('429') || 
-                error.message?.includes('rate limit') || 
-                error.message?.includes('Connection rate limits exceeded')) {
-                
-                errorMessage = 'Rate limit reached while initializing program. Please try again later.';
-                console.log(errorMessage);
-                
-                // Try refreshing connection
-                await refreshConnection();
-                await wait(1000);
-                
-                // Don't throw, just return false to indicate failure
-                return false;
-            }
-            
-            // Check for network issues
-            if (error.message?.includes('network') || 
-                error.message?.includes('connect') ||
-                error.message?.includes('timeout')) {
-                
-                errorMessage = 'Network error while initializing program. Please check your internet connection.';
-                console.log(errorMessage);
-                
-                // Don't throw, just return false to indicate failure
-                return false;
-            }
-            
-            // Check for specific authorization issues
-            if (error.message?.includes('unauthorized') || 
-                error.message?.includes('permission') ||
-                error.message?.includes('access denied')) {
-                
-                errorMessage = 'Authorization error. Your wallet may not have permission to perform this operation.';
-                console.log(errorMessage);
-            }
-            
-            // Add error details to window for debugging
-            if (typeof window !== 'undefined') {
-                window.solanaInitError = {
-                    message: errorMessage,
-                    originalError: error.message,
-                    stack: error.stack,
-                    timestamp: new Date().toISOString()
-                };
-            }
-            
-            // Return false instead of throwing to allow fallback handling in API
-            return false;
+            console.error('Error in SolanaAPI initialize:', error);
+            this.initialized = false;
+            throw error;
         }
     }
 
@@ -560,33 +578,38 @@ export class SolanaAPI {
 
     async getUserCDPs() {
         try {
-            // Check if program was properly initialized
-            if (!this.program) {
-                console.log('Program not initialized, returning empty CDP list');
-                return {
-                    success: true,
-                    data: []
-                };
+            if (!this.initialized || !this.program) {
+                throw new Error('Program not initialized. Please initialize first.');
             }
 
+            console.log('Fetching CDPs for user:', this.wallet.publicKey.toString());
+
+            // Fetch all CDPs owned by the user
             const cdps = await this.program.account.cdp.all([
                 {
                     memcmp: {
-                        offset: 0, // owner field offset
+                        offset: 8, // Skip discriminator
                         bytes: this.wallet.publicKey.toBase58()
                     }
                 }
             ]);
 
+            console.log('Found CDPs:', cdps);
+
             return {
                 success: true,
-                data: cdps
+                data: cdps.map(cdp => ({
+                    address: cdp.publicKey.toString(),
+                    owner: cdp.account.owner.toString(),
+                    collateralAmount: cdp.account.collateralAmount.toString(),
+                    saiAmount: cdp.account.saiAmount.toString()
+                }))
             };
         } catch (error) {
             console.error('Error fetching user CDPs:', error);
             return {
                 success: false,
-                error: error.message
+                error: error.message || 'Failed to fetch CDPs'
             };
         }
     }
@@ -863,68 +886,40 @@ export class SolanaAPI {
 
     async getTokenBalances() {
         try {
-            // Check if connection is established
-            if (!this.connection) {
-                console.log('Connection not initialized, cannot fetch token balances');
-                return {
-                    success: false,
-                    error: 'Connection not initialized'
-                };
-            }
-
-            // We can still get SOL balance even if program isn't initialized
-            let solBalance = 0;
-            try {
-                solBalance = await this.connection.getBalance(this.wallet.publicKey);
-                solBalance = solBalance / LAMPORTS_PER_SOL;
-            } catch (error) {
-                console.error('Error fetching SOL balance:', error);
-            }
-
-            // Initialize with SOL balance which doesn't depend on program
-            const balances = {
-                sol: solBalance,
-                sai: 0,
-                sld: 0
-            };
+            await this.ensureConnection();
             
-            // Get token balances if possible
+            const solBalance = await this.connection.getBalance(this.wallet.publicKey);
+            
+            // Get SAI token balance
+            let saiBalance = 0;
             try {
-                // Try to get SAI token account
-                const saiTokenAccount = await this.findOrCreateAssociatedTokenAccount(
-                    this.wallet.publicKey,
-                    new PublicKey(SAI_MINT)
-                );
-                
+                const saiTokenAccount = await this.findOrCreateAssociatedTokenAccount(this.saiMint);
                 if (saiTokenAccount) {
-                    const saiTokenInfo = await this.connection.getTokenAccountBalance(saiTokenAccount.address);
-                    balances.sai = saiTokenInfo.value.uiAmount;
-                }
-                
-                // Try to get SLD token account
-                const sldTokenAccount = await this.findOrCreateAssociatedTokenAccount(
-                    this.wallet.publicKey,
-                    new PublicKey(SLD_MINT)
-                );
-                
-                if (sldTokenAccount) {
-                    const sldTokenInfo = await this.connection.getTokenAccountBalance(sldTokenAccount.address);
-                    balances.sld = sldTokenInfo.value.uiAmount;
+                    const accountInfo = await this.connection.getTokenAccountBalance(saiTokenAccount);
+                    saiBalance = accountInfo.value.uiAmount || 0;
                 }
             } catch (error) {
-                console.error('Error fetching token balances:', error);
-                // We still return the SOL balance even if token balances fail
+                console.error('Error getting SAI balance:', error);
             }
-
+            
             return {
                 success: true,
-                data: balances
+                data: {
+                    sol: solBalance / LAMPORTS_PER_SOL,
+                    sai: saiBalance,
+                    sld: 0 // Default to 0 for now
+                }
             };
         } catch (error) {
-            console.error('Error in getTokenBalances:', error);
+            console.error('Error fetching token balances:', error);
             return {
                 success: false,
-                error: error.message
+                error: error.message,
+                data: {
+                    sol: 0,
+                    sai: 0,
+                    sld: 0
+                }
             };
         }
     }
@@ -1210,81 +1205,89 @@ export class SolanaAPI {
     }
 
     // Add findOrCreateAssociatedTokenAccount method
-    async findOrCreateAssociatedTokenAccount(owner, mint) {
+    async findOrCreateAssociatedTokenAccount(mint) {
         try {
-            // Check if connection is established
-            if (!this.connection) {
-                console.log('Connection not initialized, cannot find/create token account');
-                return null;
+            await this.ensureConnection();
+
+            // Ensure mint is a PublicKey instance
+            const mintPubKey = mint instanceof PublicKey ? mint : new PublicKey(mint);
+            
+            // If this is the SAI mint and it doesn't exist, initialize it
+            if (mintPubKey.equals(SAI_MINT)) {
+                try {
+                    const newMintPubKey = await this.initializeSAIMint();
+                    // Update the SAI_MINT reference
+                    SAI_MINT = newMintPubKey;
+                    this.saiMint = newMintPubKey.toString();
+                } catch (error) {
+                    console.error('Failed to initialize SAI mint:', error);
+                    throw error;
+                }
             }
+
+            // Ensure owner is a PublicKey instance
+            const ownerPubKey = this.wallet.publicKey instanceof PublicKey ? 
+                this.wallet.publicKey : 
+                new PublicKey(this.wallet.publicKey);
 
             // Get associated token address
             const associatedTokenAddress = await getAssociatedTokenAddress(
-                mint,
-                owner
+                SAI_MINT,
+                ownerPubKey,
+                false,
+                TOKEN_PROGRAM_ID
             );
             
-            console.log(`Token account address for ${mint.toString()}: ${associatedTokenAddress.toString()}`);
+            console.log(`Token account address for ${SAI_MINT.toString()}: ${associatedTokenAddress.toString()}`);
             
             // Check if the account exists
-            const accountInfo = await this.connection.getAccountInfo(associatedTokenAddress);
-            
-            if (accountInfo) {
-                console.log('Token account exists, returning address');
-                return {
-                    exists: true,
-                    address: associatedTokenAddress
-                };
+            try {
+                const accountInfo = await this.connection.getAccountInfo(associatedTokenAddress);
+                
+                if (accountInfo) {
+                    console.log('Token account exists');
+                    return associatedTokenAddress;
+                }
+            } catch (error) {
+                console.log('Error checking account info:', error);
             }
             
             console.log('Token account does not exist, creating it');
             
-            // Create the account
+            // Create the associated token account
             try {
                 const transaction = new Transaction().add(
                     createAssociatedTokenAccountInstruction(
-                        this.wallet.publicKey, // payer
+                        ownerPubKey, // payer
                         associatedTokenAddress, // associated token account
-                        owner, // owner
-                        mint, // mint
+                        ownerPubKey, // owner
+                        SAI_MINT // mint
                     )
                 );
                 
-                // Setting recent blockhash and fee payer
-                transaction.feePayer = this.wallet.publicKey;
-                transaction.recentBlockhash = (await this.connection.getLatestBlockhash()).blockhash;
+                // Get recent blockhash
+                const { blockhash } = await this.connection.getLatestBlockhash('finalized');
+                transaction.recentBlockhash = blockhash;
+                transaction.feePayer = ownerPubKey;
                 
-                // Sign and send the transaction
-                const signature = await this.wallet.signAndSendTransaction(transaction);
-                await this.connection.confirmTransaction(signature, 'confirmed');
+                // Sign and send transaction
+                const signature = await this.wallet.sendTransaction(transaction, this.connection);
                 
-                console.log(`Created token account: ${associatedTokenAddress.toString()}`);
-                
-                return {
-                    exists: false,
-                    created: true,
-                    address: associatedTokenAddress
-                };
-            } catch (createError) {
-                // If the creation fails (possibly due to race condition where account was just created)
-                console.error('Error creating token account:', createError);
-                
-                // Check if account exists now (it might have been created in another tab/transaction)
-                const accountInfo = await this.connection.getAccountInfo(associatedTokenAddress);
-                if (accountInfo) {
-                    console.log('Token account now exists (created elsewhere)');
-                    return {
-                        exists: true,
-                        address: associatedTokenAddress
-                    };
+                // Wait for confirmation
+                const confirmation = await this.connection.confirmTransaction(signature, 'confirmed');
+                if (confirmation.value.err) {
+                    throw new Error(`Failed to create token account: ${confirmation.value.err}`);
                 }
                 
-                // If account still doesn't exist, propagate the error
-                throw createError;
+                console.log(`Created token account: ${associatedTokenAddress.toString()}`);
+                return associatedTokenAddress;
+            } catch (error) {
+                console.error('Error creating token account:', error);
+                throw error;
             }
         } catch (error) {
             console.error('Error in findOrCreateAssociatedTokenAccount:', error);
-            return null;
+            throw error;
         }
     }
 } 

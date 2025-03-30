@@ -18,7 +18,10 @@ import {
     initializeAPI,
     isAPIInitialized,
     mintTestSAI,
-    getTokenBalances
+    getTokenBalances,
+    initializeCDP,
+    createVaultAndMintSai,
+    validateWalletAdapter
 } from '../api/index';
 import LiquidationRiskIndicator from './LiquidationRiskIndicator';
 import SaiTransfer from './SaiTransfer';
@@ -69,226 +72,166 @@ const SaiInterface = () => {
     const [mintingInProgress, setMintingInProgress] = useState(false);
     const [connectionError, setConnectionError] = useState(null);
 
-    useEffect(() => {
-        console.log("SaiInterface - Component mounted");
-        
-        // Try to auto-connect to Phantom on component mount
-        if (window.solana && window.solana.isPhantom && !connected) {
-            console.log("SaiInterface - Attempting to auto-connect to Phantom");
-            window.solana.connect({ onlyIfTrusted: true })
-                .then(() => {
-                    console.log("SaiInterface - Auto-connected to Phantom");
-                })
-                .catch(err => {
-                    console.log("SaiInterface - Auto-connect failed:", err.message);
-                });
+    const [vaultAddress, setVaultAddress] = useState('');
+    const [saiTokenAccount, setSaiTokenAccount] = useState('');
+    const [success, setSuccess] = useState(false);
+
+    // Define loadUserData function before it's used
+    const loadUserData = async () => {
+        try {
+            setLoading(true);
+            setError(null);
+
+            // Load CDPs
+            console.log('Loading user CDPs...');
+            const cdpsResult = await getUserCDPs();
+            if (!cdpsResult.success) {
+                throw new Error(cdpsResult.error || 'Failed to load CDPs');
+            }
+            setCdps(cdpsResult.data || []);
+
+            // Load balances
+            console.log('Loading token balances...');
+            const balancesResult = await getTokenBalances();
+            if (!balancesResult.success) {
+                throw new Error(balancesResult.error || 'Failed to load balances');
+            }
+            setBalances(balancesResult.data || { sol: 0, sai: 0 });
+            setWalletBalance({
+                sol: balancesResult.data?.sol || 0,
+                sai: balancesResult.data?.sai || 0
+            });
+
+            setLoading(false);
+        } catch (error) {
+            console.error('Error loading user data:', error);
+            setError(getErrorMessage(error));
+            setLoading(false);
         }
-        
+    };
+
+    // Define initializeWallet function
+    const initializeWallet = async () => {
+        try {
+            setInitializing(true);
+            setError(null);
+            
+            // First, ensure Phantom is installed and connected
+            if (!window.solana || !window.solana.isPhantom) {
+                throw new Error('Phantom wallet not installed');
+            }
+
+            // Try to connect if not already connected
+            if (!window.solana.isConnected) {
+                console.log("Attempting to connect to Phantom");
+                await window.solana.connect();
+            }
+
+            // Get the public key directly from Phantom
+            const phantomPublicKeyRaw = window.solana.publicKey;
+            console.log('Phantom public key:', phantomPublicKeyRaw?.toString());
+
+            if (!phantomPublicKeyRaw) {
+                throw new Error('Failed to get public key from Phantom');
+            }
+
+            // Create wallet adapter object with all required methods
+            const walletAdapter = {
+                publicKey: phantomPublicKeyRaw,
+                connected: true,
+                connecting: false,
+                disconnecting: false,
+                
+                signTransaction: async (transaction) => {
+                    console.log('Signing transaction...');
+                    try {
+                        const signed = await window.solana.signTransaction(transaction);
+                        console.log('Transaction signed successfully');
+                        return signed;
+                    } catch (error) {
+                        console.error('Error signing transaction:', error);
+                        throw error;
+                    }
+                },
+                
+                signAllTransactions: async (transactions) => {
+                    console.log('Signing multiple transactions...');
+                    try {
+                        const signed = await window.solana.signAllTransactions(transactions);
+                        console.log('All transactions signed successfully');
+                        return signed;
+                    } catch (error) {
+                        console.error('Error signing transactions:', error);
+                        throw error;
+                    }
+                },
+                
+                sendTransaction: async (transaction, connection, options = {}) => {
+                    console.log('Sending transaction...');
+                    try {
+                        // Ensure transaction has recent blockhash
+                        if (!transaction.recentBlockhash) {
+                            const { blockhash } = await connection.getLatestBlockhash('finalized');
+                            transaction.recentBlockhash = blockhash;
+                        }
+                        
+                        // Sign transaction
+                        const signed = await window.solana.signTransaction(transaction);
+                        
+                        // Send raw transaction
+                        const signature = await connection.sendRawTransaction(
+                            signed.serialize(),
+                            options
+                        );
+                        
+                        console.log('Transaction sent successfully:', signature);
+                        
+                        if (options.preflightCommitment) {
+                            await connection.confirmTransaction(signature, options.preflightCommitment);
+                            console.log('Transaction confirmed');
+                        }
+                        
+                        return signature;
+                    } catch (error) {
+                        console.error('Error sending transaction:', error);
+                        throw error;
+                    }
+                }
+            };
+
+            console.log('Created wallet adapter:', {
+                hasPublicKey: !!walletAdapter.publicKey,
+                publicKeyStr: walletAdapter.publicKey?.toString(),
+                connected: walletAdapter.connected
+            });
+
+            // Initialize API with the wallet adapter
+            console.log('Initializing API with wallet adapter');
+            await initializeAPI(walletAdapter);
+            
+            // Load initial data
+            console.log('Loading user data');
+            await loadUserData();
+            
+            console.log('Initialization complete');
+            setInitializing(false);
+            setError(null);
+        } catch (error) {
+            console.error('Error initializing wallet:', error);
+            setError(getErrorMessage(error));
+            setInitializing(false);
+            setRetryAction(() => initializeWallet);
+        }
+    };
+
+    // Update useEffect to use initializeWallet
+    useEffect(() => {
+        console.log("Component mounted");
+        initializeWallet();
         return () => {
-            console.log("SaiInterface - Component unmounted");
+            console.log("Component unmounted");
         };
     }, []);
-
-    useEffect(() => {
-        console.log("SaiInterface - Wallet connection state changed:", {
-            connected,
-            hasWallet: !!wallet,
-            hasPublicKey: !!publicKey,
-            publicKeyStr: publicKey?.toString()
-        });
-    }, [connected, wallet, publicKey]);
-
-    const attemptWalletReconnect = async () => {
-        if (reconnectAttempts >= 3) {
-            setError("Maximum reconnection attempts reached. Please try again later or refresh the page.");
-            return false;
-        }
-        
-        setWalletStatus('reconnecting');
-        setReconnectAttempts(prev => prev + 1);
-        
-        console.log("SaiInterface - Attempting wallet reconnect...");
-        try {
-            if (window.solana && window.solana.isPhantom) {
-                // Disconnect first to clear any stale state
-                try {
-                    await window.solana.disconnect();
-                    console.log("SaiInterface - Disconnected from Phantom");
-                } catch (e) {
-                    console.log("SaiInterface - Error disconnecting:", e);
-                }
-                
-                // Wait a bit
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Reconnect
-                await window.solana.connect();
-                console.log("SaiInterface - Reconnected to Phantom");
-                setWalletStatus('connected');
-                setError(null);
-                
-                // Wait a bit more before initializing
-                await new Promise(resolve => setTimeout(resolve, 500));
-                
-                // Try initializing again
-                await initializeWalletAndLoadData();
-                return true;
-            }
-        } catch (error) {
-            console.error("SaiInterface - Reconnect failed:", error);
-            setWalletStatus('error');
-        }
-        return false;
-    };
-
-        const initializeWalletAndLoadData = async () => {
-        console.log("SaiInterface - Initializing wallet and loading data");
-        setWalletStatus('initializing');
-        
-        if (connected && wallet) {
-                try {
-                console.log('SaiInterface - Wallet connected:', {
-                        connected,
-                        hasWallet: !!wallet,
-                        hasPublicKey: !!publicKey,
-                    publicKeyStr: publicKey?.toString()
-                });
-
-                // If we don't have a public key from wallet adapter but Phantom is available
-                if (!publicKey && window.solana && window.solana.isPhantom) {
-                    console.log('SaiInterface - Public key not available from wallet adapter. Trying direct connection to Phantom');
-                    try {
-                        // Try to connect directly to Phantom and get its public key
-                        const directPhantomResponse = await window.solana.connect();
-                        console.log('SaiInterface - Direct Phantom connection succeeded:', directPhantomResponse);
-                        
-                        // Create a local patch for the wallet object that includes the public key
-                        const patchedWallet = {
-                            ...wallet,
-                            publicKey: directPhantomResponse.publicKey,
-                            connected: true,
-                            // If wallet lacks signTransaction, use the one from Phantom
-                            signTransaction: wallet.signTransaction || 
-                                ((tx) => window.solana.signTransaction(tx)),
-                            // Also add the sendTransaction method which is needed for most operations
-                            sendTransaction: wallet.sendTransaction || 
-                                (async (tx, connection, options = {}) => {
-                                    console.log('Using patched sendTransaction from Phantom');
-                                    
-                                    // Ensure transaction has a recent blockhash 
-                                    if (!tx.recentBlockhash) {
-                                        console.log('Transaction missing recentBlockhash, adding it now');
-                                        try {
-                                            const { blockhash } = await connection.getLatestBlockhash('confirmed');
-                                            tx.recentBlockhash = blockhash;
-                                            console.log('Added recentBlockhash to transaction:', blockhash);
-                                        } catch (error) {
-                                            console.error('Error getting blockhash:', error);
-                                            throw error;
-                                        }
-                                    }
-                                    
-                                    // Use the appropriate method from Phantom to send the transaction
-                                    return window.solana.signAndSendTransaction ? 
-                                        window.solana.signAndSendTransaction(tx) : 
-                                        window.solana.sendTransaction(tx);
-                                }),
-                            // Add signAllTransactions for completeness
-                            signAllTransactions: wallet.signAllTransactions ||
-                                ((txs) => window.solana.signAllTransactions(txs))
-                        };
-                        
-                        console.log('SaiInterface - Created patched wallet with publicKey:', 
-                            patchedWallet.publicKey.toString());
-                        
-                        // Initialize API with our patched wallet
-                        if (!isAPIInitialized()) {
-                            console.log('SaiInterface - API not initialized, initializing with patched wallet...');
-                            try {
-                                await initializeAPI(patchedWallet);
-                                console.log('SaiInterface - API initialized successfully with patched wallet');
-                                setWalletStatus('connected');
-                                
-                                // Load data with patched wallet
-                                await Promise.all([
-                                    loadUserCDPs(),
-                                    loadWalletData(),
-                                    loadActiveLiquidations()
-                                ]);
-                                
-                                return true;
-                            } catch (apiError) {
-                                console.error('SaiInterface - API initialization with patched wallet failed:', apiError);
-                                throw apiError;
-                            }
-                        }
-                    } catch (phantomError) {
-                        console.error('SaiInterface - Direct Phantom connection failed:', phantomError);
-                    }
-                }
-
-                    // Clear any existing errors
-                    setError(null);
-
-                    // Initialize API if not already initialized
-                    if (!isAPIInitialized()) {
-                    console.log('SaiInterface - API not initialized, initializing now...');
-                    try {
-                        await initializeAPI(wallet);
-                        console.log('SaiInterface - API initialized successfully');
-                        setWalletStatus('connected');
-                    } catch (apiError) {
-                        console.error('SaiInterface - API initialization failed:', apiError);
-                        setError(`Failed to initialize API: ${apiError.message}`);
-                        setWalletStatus('error');
-                        
-                        // Try to reconnect if the error is related to wallet connection
-                        if (apiError.message.includes('Wallet is not connected') || 
-                            apiError.message.includes('public key is not available')) {
-                            return await attemptWalletReconnect();
-                        }
-                        return false;
-                    }
-                } else {
-                    console.log('SaiInterface - API already initialized');
-                    setWalletStatus('connected');
-                    }
-
-                    // Load data only after API is initialized
-                console.log('SaiInterface - Loading user data...');
-                try {
-                    await Promise.all([
-                        loadUserCDPs(),
-                        loadWalletData(),
-                        loadActiveLiquidations()
-                    ]);
-                    console.log('SaiInterface - User data loaded successfully');
-                    return true;
-                } catch (dataError) {
-                    console.error('SaiInterface - Failed to load user data:', dataError);
-                    setError(`Failed to load user data: ${dataError.message}`);
-                    return false;
-                }
-                } catch (error) {
-                console.error('SaiInterface - Failed to initialize:', error);
-                    setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
-                setWalletStatus('error');
-                return false;
-            }
-        } else {
-            console.log('SaiInterface - Wallet not ready:', {
-                connected,
-                hasWallet: !!wallet,
-                hasPublicKey: !!publicKey
-            });
-            setWalletStatus('disconnected');
-            return false;
-        }
-    };
-
-    useEffect(() => {
-        initializeWalletAndLoadData();
-    }, [connected, wallet, publicKey]);
 
     useEffect(() => {
         if (selectedCDP) {
@@ -302,43 +245,6 @@ const SaiInterface = () => {
             checkLiquidationRisk();
         }
     }, [cdpDetails]);
-
-    const loadUserCDPs = async () => {
-            setLoading(true);
-        try {
-            const result = await getUserCDPs();
-            
-            // Check if the result has success flag and data structure
-            if (result && result.success && result.data) {
-                setCdps(result.data);
-            } else if (result && Array.isArray(result)) {
-                // Handle old format for backward compatibility
-                setCdps(result);
-            } else if (result && !result.success) {
-                // Handle error response
-                setError({
-                    message: `Failed to load CDPs: ${result.error || 'Unknown error'}`,
-                    recoverable: true
-                });
-                // Set empty CDPs list
-                setCdps([]);
-            } else {
-                // Fallback for unexpected response format
-                console.error('Unexpected response from getUserCDPs:', result);
-                setCdps([]);
-            }
-        } catch (error) {
-            console.error('Error loading user CDPs:', error);
-            setError({
-                message: `Failed to load CDPs: ${error.message}`,
-                recoverable: true
-            });
-            // Set empty CDPs list
-            setCdps([]);
-        } finally {
-            setLoading(false);
-        }
-    };
 
     const loadCDPDetails = async (cdpAddress) => {
         try {
@@ -450,280 +356,248 @@ const SaiInterface = () => {
         }
     };
 
-    const handleCreateCDP = async (e) => {
-        e.preventDefault();
-        
-        if (!connected || !wallet || !publicKey) {
-            setError('Please connect your wallet first');
-            return;
-        }
-
-        // Ensure API is initialized
-        if (!isAPIInitialized()) {
-            try {
-                console.log('Initializing API before creating CDP...');
-                await initializeAPI({
-                    ...wallet,
-                    publicKey: publicKey
-                });
-                console.log('API initialized successfully');
-            } catch (error) {
-                console.error('Failed to initialize API:', error);
-                setError('Failed to initialize wallet connection. Please try reconnecting your wallet.');
-                return;
-            }
-        }
-
+    const validateInputs = () => {
         if (!collateralAmount || !saiAmount) {
             setError('Please enter both collateral and SAI amounts');
-            return;
+            return false;
         }
 
-        // Parse values and check if they're valid
         const collateral = parseFloat(collateralAmount);
         const sai = parseFloat(saiAmount);
 
         if (isNaN(collateral) || isNaN(sai)) {
             setError('Please enter valid numbers');
-            return;
+            return false;
         }
 
         if (collateral <= 0 || sai <= 0) {
             setError('Amounts must be greater than 0');
-            return;
+            return false;
         }
         
         // Check that the user has enough SOL
         if (collateral > walletBalance.sol) {
             setError(`You don't have enough SOL. Your balance: ${walletBalance.sol} SOL`);
-            return;
+            return false;
         }
         
         // Check reasonable ratio (minimum ~150% collateralization)
         const collateralValueInUSD = collateral * 20; // Assuming 1 SOL = $20 USD
         if (collateralValueInUSD < sai * 1.5) {
             setError('Collateralization ratio too low. Add more collateral or reduce SAI amount.');
-            return;
+            return false;
         }
 
+        return true;
+    };
+
+    const handleTransaction = async (action, params = {}) => {
+        if (!connected || !publicKey) {
+            setError('Please connect your wallet first');
+            return null;
+        }
+
+        setLoading(true);
+        setError(null);
+
         try {
-            setIsCreating(true);
-            setError(null);
-            
-            console.log('Creating CDP with:', { collateral, sai });
-            
-            // Check if we can use Phantom directly for better compatibility
-            if (window.solana && window.solana.isPhantom) {
-                console.log('Using direct Phantom wallet for better compatibility');
-                
-                // Ensure Phantom is connected
-                if (!window.solana.isConnected) {
-                    try {
-                        await window.solana.connect();
-                        console.log('Connected to Phantom wallet');
-                    } catch (connectError) {
-                        console.error('Failed to connect to Phantom:', connectError);
-                        throw new Error('Failed to connect to Phantom wallet');
-                    }
-                }
-            }
-            
-            // Add a retry mechanism
-            let retryCount = 0;
-            let result = null;
-            
-            while (retryCount < 2) {
-                try {
-                    result = await createCDP(collateral, sai);
-            console.log('CDP creation result:', result);
-                    break; // If successful, exit the loop
-                } catch (error) {
-                    console.error(`CDP creation attempt ${retryCount+1} failed:`, error);
-                    
-                    if (error.message.includes('rejected') && retryCount < 1) {
-                        // User may have rejected, give them another chance
-                        console.log('Transaction was rejected, retrying once...');
-                        retryCount++;
-                        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait a second
-                    } else {
-                        // Other error or we've already retried
-                        throw error;
-                    }
-                }
+            console.log(`Attempting ${action}...`, params);
+            let result;
+
+            switch (action) {
+                case 'mintSAI':
+                    result = await mintTestSAI(params.amount);
+                    break;
+                case 'createCDP':
+                    result = await createVaultAndMintSai(params.collateral, params.sai, wallet);
+                    break;
+                case 'addCollateral':
+                    result = await addCollateral(params.cdpId, params.amount);
+                    break;
+                case 'drawSAI':
+                    result = await drawSai(params.cdpId, params.amount);
+                    break;
+                case 'repaySAI':
+                    result = await repaySai(params.cdpId, params.amount);
+                    break;
+                case 'closeCDP':
+                    result = await closeCDP(params.cdpId);
+                    break;
+                default:
+                    throw new Error('Unknown action type');
             }
 
-            if (result && result.success) {
-                setCollateralAmount('');
-                setSaiAmount('');
-                setView('list');
-                await loadUserCDPs();
-                await loadWalletData(); // Refresh balances
-            } else if (result) {
-                // Handle known error types with user-friendly messages
-                let errorMessage = result.error;
-                
-                if (result.error.includes('rejected') || result.error.includes('cancelled')) {
-                    errorMessage = 'Transaction cancelled. You rejected the transaction in your wallet.';
-                } else if (result.error.includes('Unexpected error')) {
-                    errorMessage = tryDiagnosePhantomError();
-                } else if (result.error.includes('insufficient funds')) {
-                    errorMessage = 'Insufficient funds for transaction. Make sure you have enough SOL to cover fees.';
-                }
-                
-                setError(errorMessage);
+            console.log(`${action} result:`, result);
+
+            if (result.success) {
+                // Refresh data
+                await Promise.all([
+                    loadWalletData(),
+                    loadUserData(),
+                    params.cdpId && loadCDPDetails(params.cdpId)
+                ].filter(Boolean));
+
+                return result;
             } else {
-                setError('Failed to create CDP due to an unknown error');
+                throw new Error(result.error || `Failed to ${action}`);
             }
         } catch (error) {
-            console.error('Error creating CDP:', error);
-            let errorMessage = error.message;
+            console.error(`Error in ${action}:`, error);
             
-            // Check for rate limit errors
-            if (error.message?.includes('429') || 
-                error.message?.includes('rate limit') || 
-                error.message?.includes('Connection rate limits exceeded')) {
-                
-                console.log('Rate limit detected in exception, refreshing connection...');
-                await refreshConnection();
-                
-                errorMessage = `Connection error: ${error.message} - Connection refreshed, please try again.`;
+            // Handle different types of errors
+            let errorMessage = error.message || `Failed to ${action}`;
+            
+            if (error.message?.includes('User rejected')) {
+                errorMessage = 'Transaction was rejected. Please try again.';
+            } else if (error.message?.includes('insufficient funds')) {
+                errorMessage = 'Insufficient SOL balance for transaction fees.';
+            } else if (error.message?.includes('429') || error.message?.includes('rate limit')) {
+                errorMessage = 'Rate limit exceeded. Please wait a moment and try again.';
             }
             
             setError(errorMessage);
-        } finally {
-            setIsCreating(false);
-        }
-    };
-
-    const handleAddCollateral = async () => {
-        try {
-            setLoading(true);
-            const amount = parseFloat(actionAmount);
-
-            if (isNaN(amount)) {
-                throw new Error('Please enter a valid amount');
-            }
-
-            const result = await addCollateral(selectedCDP, amount * 1e9);
-
-            if (result.success) {
-                loadCDPDetails(selectedCDP);
-                setActionAmount('');
-            } else {
-                throw new Error(result.error);
-            }
-        } catch (error) {
-            console.error('Error adding collateral:', error);
-            alert(error.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleDrawSai = async () => {
-        try {
-            setLoading(true);
-            const amount = parseFloat(actionAmount);
-
-            if (isNaN(amount)) {
-                throw new Error('Please enter a valid amount');
-            }
-
-            const result = await drawSai(selectedCDP, amount * 1e9);
-
-            if (result.success) {
-                loadCDPDetails(selectedCDP);
-                setActionAmount('');
-            } else {
-                throw new Error(result.error);
-            }
-        } catch (error) {
-            console.error('Error drawing SAI:', error);
-            alert(error.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleRepaySai = async () => {
-        try {
-            setLoading(true);
-            const amount = parseFloat(actionAmount);
-
-            if (isNaN(amount)) {
-                throw new Error('Please enter a valid amount');
-            }
-
-            const result = await repaySai(selectedCDP, amount * 1e9);
-
-            if (result.success) {
-                loadCDPDetails(selectedCDP);
-                setActionAmount('');
-            } else {
-                throw new Error(result.error);
-            }
-        } catch (error) {
-            console.error('Error repaying SAI:', error);
-            alert(error.message);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const handleCloseCDP = async () => {
-        try {
-            setLoading(true);
-            const result = await closeCDP(selectedCDP);
-
-            if (result.success) {
-                setView('list');
-                loadUserCDPs();
-                setSelectedCDP(null);
-                setCdpDetails(null);
-            } else {
-                throw new Error(result.error);
-            }
-        } catch (error) {
-            console.error('Error closing CDP:', error);
-            alert(error.message);
+            return null;
         } finally {
             setLoading(false);
         }
     };
 
     const handleMintTestSAI = async () => {
-        if (!mintAmount || isNaN(mintAmount) || mintAmount <= 0) {
-            setError({
-                message: 'Please enter a valid amount to mint',
-                recoverable: true
-            });
+        if (!connected || !publicKey) {
+            setError('Please connect your wallet first');
             return;
         }
-        
+
+        if (!mintAmount || mintAmount <= 0) {
+            setError('Please enter a valid amount to mint');
+            return;
+        }
+
         setMintingInProgress(true);
+        setError(null);
+
         try {
+            // Create a wallet adapter object with the required methods
+            const walletAdapter = {
+                publicKey: publicKey,
+                signTransaction: async (transaction) => {
+                    try {
+                        return await wallet.signTransaction(transaction);
+                    } catch (error) {
+                        console.error('Error signing transaction:', error);
+                        throw error;
+                    }
+                },
+                signAllTransactions: async (transactions) => {
+                    try {
+                        return await wallet.signAllTransactions(transactions);
+                    } catch (error) {
+                        console.error('Error signing transactions:', error);
+                        throw error;
+                    }
+                },
+                sendTransaction: async (transaction, connection, options = {}) => {
+                    try {
+                        return await wallet.sendTransaction(transaction, connection, options);
+                    } catch (error) {
+                        console.error('Error sending transaction:', error);
+                        throw error;
+                    }
+                }
+            };
+
+            // Initialize API with the wallet adapter
+            await initializeAPI(walletAdapter);
+
+            // Attempt to mint SAI
             const result = await mintTestSAI(parseFloat(mintAmount));
-            
+            console.log('Mint result:', result);
+
             if (result.success) {
-                // Show success message
                 alert(`Successfully minted ${mintAmount} SAI tokens!`);
-                // Refresh wallet data
-                loadTokenBalances();
+                setMintAmount(0);
+                await loadWalletData();
             } else {
-                // Show error message
-                setError({
-                    message: `Failed to mint SAI: ${result.error}`,
-                    recoverable: true
-                });
+                throw new Error(result.error || 'Failed to mint SAI tokens');
             }
         } catch (error) {
             console.error('Error minting SAI:', error);
-            setError({
-                message: `Error minting SAI: ${error.message}`,
-                recoverable: true
-            });
+            setError(error.message || 'Failed to mint SAI tokens');
         } finally {
             setMintingInProgress(false);
+        }
+    };
+
+    const handleCreateVault = async (e) => {
+        e.preventDefault();
+        
+        if (!validateInputs()) {
+            return;
+        }
+
+        const result = await handleTransaction('createCDP', {
+            collateral: parseFloat(collateralAmount),
+            sai: parseFloat(saiAmount)
+        });
+
+        if (result?.success) {
+            setCollateralAmount('');
+            setSaiAmount('');
+            setView('list');
+        }
+    };
+
+    const handleAddCollateral = async (e) => {
+        e.preventDefault();
+        if (!actionAmount || parseFloat(actionAmount) <= 0) {
+            setError('Please enter a valid amount');
+            return;
+        }
+
+        await handleTransaction('addCollateral', {
+            cdpId: selectedCDP,
+            amount: parseFloat(actionAmount)
+        });
+    };
+
+    const handleDrawSai = async (e) => {
+        e.preventDefault();
+        if (!actionAmount || parseFloat(actionAmount) <= 0) {
+            setError('Please enter a valid amount');
+            return;
+        }
+        
+        await handleTransaction('drawSAI', {
+            cdpId: selectedCDP,
+            amount: parseFloat(actionAmount)
+        });
+    };
+
+    const handleRepaySai = async (e) => {
+        e.preventDefault();
+        if (!actionAmount || parseFloat(actionAmount) <= 0) {
+            setError('Please enter a valid amount');
+            return;
+        }
+
+        await handleTransaction('repaySAI', {
+            cdpId: selectedCDP,
+            amount: parseFloat(actionAmount)
+        });
+    };
+
+    const handleCloseCDP = async () => {
+        if (!window.confirm('Are you sure you want to close this CDP?')) {
+            return;
+        }
+
+        const result = await handleTransaction('closeCDP', {
+            cdpId: selectedCDP
+        });
+
+        if (result?.success) {
+            setView('list');
+            setSelectedCDP(null);
         }
     };
 
@@ -875,11 +749,11 @@ const SaiInterface = () => {
                 <div className="card form-card">
                     {error && (
                         <div className="error-message">
-                            {error}
+                            {typeof error === 'string' ? error : error.message || 'An unknown error occurred'}
                         </div>
                     )}
                     
-                    <form onSubmit={handleCreateCDP}>
+                    <form onSubmit={handleCreateVault}>
                         <div className="form-group">
                             <label htmlFor="collateralAmount">Collateral Amount</label>
                             <div className="input-with-suffix">
@@ -928,9 +802,9 @@ const SaiInterface = () => {
                             <button 
                                 type="submit" 
                                 className="button primary-button"
-                                disabled={isCreating || !connected}
+                                disabled={loading}
                             >
-                                {isCreating ? 'Creating...' : 'Create CDP'}
+                                {loading ? 'Creating...' : 'Create CDP'}
                             </button>
                         </div>
                     </form>
@@ -1208,7 +1082,7 @@ const SaiInterface = () => {
     // Add a function to refresh wallet data after transfers
     const refreshWalletData = () => {
         loadWalletData();
-        loadUserCDPs();
+        loadUserData();
     };
 
     // Add this function inside the component to handle connection recovery
@@ -1243,7 +1117,7 @@ const SaiInterface = () => {
         return (
             <div className="connection-recovery">
                 <p>
-                    <strong>Connection Issue Detected:</strong> {connectionError}
+                    <strong>Connection Issue Detected:</strong> {getErrorMessage(connectionError)}
                 </p>
                 <p className="recovery-hint">
                     This could be due to Solana network congestion or rate limiting. 
@@ -1258,171 +1132,6 @@ const SaiInterface = () => {
             </div>
         );
     };
-
-    // Add improved error handling for program initialization failures
-    async function initializeWallet() {
-        setInitializing(true);
-        setError(null);
-        
-        try {
-            console.log('Initializing wallet connection...');
-            
-            // Check if Phantom is installed
-            if (!window.solana || !window.solana.isPhantom) {
-                throw new Error('Phantom wallet not installed. Please install Phantom to continue.');
-            }
-            
-            // Check if connected to Devnet
-            try {
-                const network = await window.solana.request({ method: 'getNetwork' });
-                console.log('Current network:', network);
-                if (network && network.name !== 'devnet') {
-                    setError({
-                        message: `Please connect to Devnet network in Phantom wallet. Current network: ${network.name}`,
-                        recoverable: true
-                    });
-                    setInitializing(false);
-                    return false;
-                }
-            } catch (networkError) {
-                console.log('Unable to check network:', networkError);
-                // Continue anyway, as this may fail in some wallet versions
-            }
-            
-            // First try connecting using the direct Phantom API
-            try {
-                console.log('Connecting using direct Phantom API...');
-                await window.solana.connect({ onlyIfTrusted: false });
-                console.log('Connected to Phantom wallet');
-            } catch (phantomError) {
-                console.error('Error connecting to Phantom directly:', phantomError);
-                
-                if (phantomError.message && phantomError.message.includes('User rejected')) {
-                    setError({
-                        message: 'Connection rejected by user. Please try again.',
-                        recoverable: true
-                    });
-                    setInitializing(false);
-                    return false;
-                }
-            }
-            
-            // Check if connection was successful
-            if (!window.solana.isConnected) {
-                throw new Error('Failed to connect to wallet. Please try again.');
-            }
-            
-            // Get the wallet adapter from the context
-            const wallet = {
-                publicKey: window.solana.publicKey,
-                connected: true,
-                signTransaction: async (transaction) => {
-                    try {
-                        // Use direct Phantom API which is more reliable
-                        const signed = await window.solana.signTransaction(transaction);
-                        return signed;
-                    } catch (error) {
-                        console.error('Error signing transaction:', error);
-                        
-                        // Check for user rejection
-                        if (error.message && error.message.includes('rejected')) {
-                            throw new Error('Transaction rejected by user');
-                        }
-                        
-                        throw error;
-                    }
-                },
-                signAllTransactions: async (transactions) => {
-                    try {
-                        // Use direct Phantom API which is more reliable
-                        const signed = await window.solana.signAllTransactions(transactions);
-                        return signed;
-                    } catch (error) {
-                        console.error('Error signing multiple transactions:', error);
-                        
-                        // Check for user rejection
-                        if (error.message && error.message.includes('rejected')) {
-                            throw new Error('Transactions rejected by user');
-                        }
-                        
-                        throw error;
-                    }
-                },
-                signAndSendTransaction: async (transaction) => {
-                    try {
-                        // Use direct Phantom API which is more reliable
-                        const { signature } = await window.solana.signAndSendTransaction(transaction);
-                        return signature;
-                    } catch (error) {
-                        console.error('Error signing and sending transaction:', error);
-                        
-                        // Check for user rejection
-                        if (error.message && error.message.includes('rejected')) {
-                            throw new Error('Transaction rejected by user');
-                        }
-                        
-                        throw error;
-                    }
-                }
-            };
-            
-            console.log('Wallet connected with public key:', wallet.publicKey.toString());
-            
-            // Try to initialize the API
-            try {
-                console.log('Initializing API with connected wallet...');
-                await initializeAPI(wallet);
-                console.log('API initialized successfully');
-                
-                // Load initial data
-                console.log('Loading initial data...');
-                loadWalletData();
-                loadUserCDPs();
-                
-                setInitializing(false);
-                return true;
-            } catch (apiError) {
-                console.error('Error initializing API:', apiError);
-                
-                // Special handling for programmatic errors
-                if (apiError.message.includes('Program')) {
-                    // Set a more user-friendly error message
-                    setError({
-                        message: `Failed to initialize Solana program: ${apiError.message}`,
-                        detail: 'This could be due to network issues or Solana network congestion.',
-                        recoverable: true
-                    });
-                    
-                    // Set retry action
-                    setRetryAction(() => initializeWallet);
-                } else {
-                    // Generic error
-                    setError({
-                        message: apiError.message,
-                        recoverable: true
-                    });
-                }
-                
-                setInitializing(false);
-                return false;
-            }
-        } catch (error) {
-            console.error('Fatal error initializing wallet:', error);
-            
-            // Set user-friendly error
-            setError({
-                message: `Wallet connection error: ${error.message}`,
-                detail: error.stack,
-                recoverable: true
-            });
-            
-            // Set retry action
-            setRetryAction(() => initializeWallet);
-            
-            setInitializing(false);
-            return false;
-        }
-    }
 
     // Add a retry button component
     const RetryButton = () => {
@@ -1495,43 +1204,37 @@ const SaiInterface = () => {
         try {
             const result = await getTokenBalances();
             
-            // Check if the result has success flag and data structure
             if (result && result.success && result.data) {
                 setBalances(result.data);
-                // Also update walletBalance for backward compatibility
                 setWalletBalance({
                     sol: result.data.sol,
                     sai: result.data.sai
                 });
             } else if (result && typeof result.sol !== 'undefined') {
-                // Handle old format for backward compatibility
                 setBalances(result);
                 setWalletBalance(result);
             } else if (result && !result.success) {
-                // Handle error response
-                setError({
-                    message: `Failed to load balances: ${result.error || 'Unknown error'}`,
-                    recoverable: true
-                });
-                // Still set default balances
+                setError(`Failed to load balances: ${result.error || 'Unknown error'}`);
                 setBalances({ sol: 0, sai: 0, sld: 0 });
                 setWalletBalance({ sol: 0, sai: 0 });
             } else {
-                // Fallback for unexpected response format
                 console.error('Unexpected response from getTokenBalances:', result);
                 setBalances({ sol: 0, sai: 0, sld: 0 });
                 setWalletBalance({ sol: 0, sai: 0 });
             }
         } catch (error) {
             console.error('Error loading token balances:', error);
-            setError({
-                message: `Failed to load balances: ${error.message}`,
-                recoverable: true
-            });
-            // Still set default balances
+            setError(`Failed to load balances: ${error.message || 'Unknown error'}`);
             setBalances({ sol: 0, sai: 0, sld: 0 });
             setWalletBalance({ sol: 0, sai: 0 });
         }
+    };
+
+    // Add this helper function at the top of the component
+    const getErrorMessage = (error) => {
+        if (typeof error === 'string') return error;
+        if (error && error.message) return error.message;
+        return 'An unknown error occurred';
     };
 
     // Main render function
@@ -1541,8 +1244,7 @@ const SaiInterface = () => {
             
             {error && (
                 <ErrorMessage 
-                    message={error.message || error} 
-                    detail={error.detail}
+                    message={error} 
                     onDismiss={dismissError} 
                 />
             )}
@@ -1600,18 +1302,34 @@ const SaiInterface = () => {
                     {selectedCDP && renderCDPDetail()}
                     
                     {/* Conditionally show test minting section for admin */}
-                    {balances.publicKey === '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1' && (
+                    {publicKey?.toString() === '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1' && (
                         <div className="admin-section">
                             <h2>Admin Functions</h2>
                             <p>As admin, you can mint test SAI tokens</p>
+                            {error && (
+                                <div className="error-message">
+                                    {typeof error === 'string' ? error : error.message || 'An unknown error occurred'}
+                                </div>
+                            )}
                             <div className="input-group">
                                 <input
                                     type="number"
                                     value={mintAmount}
-                                    onChange={(e) => setMintAmount(e.target.value)}
+                                    onChange={(e) => {
+                                        const value = parseFloat(e.target.value);
+                                        if (!isNaN(value) && value >= 0) {
+                                            setMintAmount(value);
+                                        }
+                                    }}
                                     placeholder="Amount of SAI to mint"
+                                    min="0"
+                                    step="1"
                                 />
-                                <button onClick={handleMintTestSAI} disabled={mintingInProgress}>
+                                <button 
+                                    onClick={handleMintTestSAI} 
+                                    disabled={mintingInProgress || !connected || mintAmount <= 0}
+                                    className="button primary-button"
+                                >
                                     {mintingInProgress ? 'Minting...' : 'Mint Test SAI'}
                                 </button>
                             </div>
