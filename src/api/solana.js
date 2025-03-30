@@ -5,9 +5,11 @@ import BN from 'bn.js';
 import saiIDL from '../idl/sai.json';
 import tokenInfo from '../scripts/sai_token_info.json';
 
-// Extract Program ID and SAI_MINT from tokenInfo
+// Constants
 const PROGRAM_ID = new PublicKey('GY7XKMrF4VMLBou37oBieKzRM6YZJHnjnic5sorE4rRU');
 const SOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
+const SAI_DECIMALS = 6; // Define SAI_DECIMALS constant
+const WSOL_MINT = SOL_MINT; // Define WSOL_MINT for compatibility
 
 // Get SAI_MINT from token info file
 let SAI_MINT;
@@ -835,9 +837,14 @@ export class SolanaAPI {
                 throw new Error('Wallet not connected');
             }
             
+            // Get admin address from token info
+            const adminAddress = tokenInfo.admin || '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1';
+            console.log('Admin from config:', adminAddress);
+            console.log('Wallet address:', this.wallet.publicKey.toString());
+            
             // Verify the caller is the admin
-            if (this.wallet.publicKey.toString() !== '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1') {
-                throw new Error('Only the admin can mint tokens');
+            if (this.wallet.publicKey.toString() !== adminAddress) {
+                throw new Error(`Only the admin can mint tokens. Current admin: ${adminAddress}`);
             }
             
             console.log(`Minting ${amount} SAI tokens to ${this.wallet.publicKey.toString()}`);
@@ -877,10 +884,14 @@ export class SolanaAPI {
                 );
             }
             
+            // Convert amount to raw units with proper decimals
+            const mintAmount = new BN(Math.floor(amount * Math.pow(10, SAI_DECIMALS)));
+            console.log('Mint amount in raw units:', mintAmount.toString());
+            
             // Add the mint instruction
             transaction.add(
                 await this.program.methods
-                    .mintSai(new BN(amount * 1_000_000)) // Convert to lamports (assuming 6 decimals)
+                    .mintSai(mintAmount)
                     .accounts({
                         admin: this.wallet.publicKey,
                         saiMint: SAI_MINT,
@@ -891,12 +902,55 @@ export class SolanaAPI {
                     .instruction()
             );
             
-            // Send and confirm the transaction
+            // Get recent blockhash and set transaction properties
+            const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash('confirmed');
+            transaction.recentBlockhash = blockhash;
+            transaction.feePayer = this.wallet.publicKey;
+            
+            console.log('Transaction prepared:', {
+                instructions: transaction.instructions.length,
+                recentBlockhash: blockhash
+            });
+            
+            // Try to use window.solana directly for better Phantom compatibility
+            if (window.solana && window.solana.isPhantom) {
+                try {
+                    console.log('Using direct Phantom API for minting');
+                    const signature = await window.solana.signAndSendTransaction(transaction);
+                    console.log('Transaction sent with signature:', signature);
+                    
+                    await this.connection.confirmTransaction({
+                        blockhash,
+                        lastValidBlockHeight,
+                        signature: signature.signature
+                    });
+                    
+                    console.log('Minting transaction confirmed');
+                    return {
+                        success: true,
+                        signature: signature.signature
+                    };
+                } catch (phantomError) {
+                    console.error('Error with Phantom API:', phantomError);
+                    // If this is a user rejection, return immediately
+                    if (phantomError.message && phantomError.message.includes('rejected')) {
+                        return {
+                            success: false,
+                            error: 'User rejected the transaction'
+                        };
+                    }
+                    // Otherwise, continue to fallback
+                    throw phantomError;
+                }
+            }
+            
+            // Fallback to wallet adapter
+            console.log('Using wallet adapter for transaction');
             const signature = await this.wallet.sendTransaction(transaction);
-            await this.connection.confirmTransaction(signature);
+            console.log('Transaction sent with signature:', signature);
+            await this.connection.confirmTransaction(signature, 'confirmed');
             
-            console.log(`Minting successful! Signature: ${signature}`);
-            
+            console.log('Minting successful!');
             return {
                 success: true,
                 signature
