@@ -1,6 +1,9 @@
 import { SolanaAPI } from './solana';
 import { connection } from '../utils/walletUtils';
-import { Connection } from '@solana/web3.js';
+import { Connection, PublicKey } from '@solana/web3.js';
+
+// Define PROGRAM_ID with the same value as in solana.js
+const PROGRAM_ID = new PublicKey('GY7XKMrF4VMLBou37oBieKzRM6YZJHnjnic5sorE4rRU');
 
 let solanaAPI = null;
 
