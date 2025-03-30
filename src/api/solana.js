@@ -10,7 +10,16 @@ const PROGRAM_ID = new PublicKey('GY7XKMrF4VMLBou37oBieKzRM6YZJHnjnic5sorE4rRU')
 const SOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
 
 // Get SAI_MINT from token info file
-const SAI_MINT = new PublicKey(tokenInfo.saiMint);
+let SAI_MINT;
+try {
+    SAI_MINT = new PublicKey(tokenInfo.saiMint);
+    console.log('SAI_MINT initialized from token info file:', SAI_MINT.toString());
+} catch (error) {
+    console.error('Error initializing SAI_MINT:', error);
+    // Fallback to a known value if token info is invalid
+    SAI_MINT = new PublicKey('GCbezKCTeHfYc6Z92sQ9ECW29XWDyo6WWmB1Dx74tisB');
+    console.log('Using fallback SAI_MINT:', SAI_MINT.toString());
+}
 
 console.log('Token Info Loaded:', {
     programId: PROGRAM_ID.toString(),
@@ -22,35 +31,65 @@ export class SolanaAPI {
     constructor(connection, wallet) {
         console.log('SolanaAPI Constructor - Debug Info:');
         console.log('Connection object:', {
-            endpoint: connection.rpcEndpoint,
-            commitment: connection.commitment
+            endpoint: connection?.rpcEndpoint,
+            commitment: connection?.commitment
         });
+        
+        // Perform enhanced wallet validation
+        if (!wallet) {
+            console.error('CRITICAL ERROR: Wallet object is null or undefined');
+            throw new Error('Wallet object is null or undefined');
+        }
+        
+        if (!wallet.connected) {
+            console.error('CRITICAL ERROR: Wallet is not connected');
+            // Check window.solana as backup
+            if (window.solana && window.solana.isConnected) {
+                console.log('Window.solana is connected but wallet adapter reports disconnected');
+                // We'll still try to proceed
+            } else {
+                throw new Error('Wallet is not connected');
+            }
+        }
+        
+        if (!wallet.publicKey) {
+            console.error('CRITICAL ERROR: Wallet public key is not available');
+            throw new Error('Wallet public key is not available');
+        }
+        
         console.log('Wallet object:', {
-            connected: wallet?.connected,
-            publicKey: wallet?.publicKey?.toString(),
-            hasSignTransaction: typeof wallet?.signTransaction === 'function'
+            connected: wallet.connected,
+            publicKey: wallet.publicKey.toString(),
+            hasSignTransaction: typeof wallet.signTransaction === 'function'
         });
         
         this.connection = connection;
         this.wallet = wallet;
         
         try {
+            console.log('Creating AnchorProvider...');
             this.provider = new AnchorProvider(connection, wallet, {
                 commitment: 'confirmed',
+                skipPreflight: false, // More reliable but slower
             });
             console.log('AnchorProvider created successfully');
             
             try {
+                console.log('Initializing Program with ID:', PROGRAM_ID.toString(), 'and IDL:', saiIDL.name);
                 this.program = new Program(saiIDL, PROGRAM_ID, this.provider);
-                console.log('Program initialized successfully with ID:', PROGRAM_ID.toString());
+                console.log('Program initialized successfully');
+                // Set a flag on window for wallet test script to detect
+                window.solana_walletAdapterIdentity = true;
             } catch (error) {
                 console.error('Failed to initialize Program:', error);
+                throw new Error(`Program initialization failed: ${error.message}`);
             }
         } catch (error) {
             console.error('Failed to create AnchorProvider:', error);
+            throw new Error(`Provider creation failed: ${error.message}`);
         }
         
-        console.log('SAI_MINT:', SAI_MINT.toString());
+        console.log('SAI_MINT being used:', SAI_MINT.toString());
     }
 
     async createCDP(collateralAmount, saiAmount) {
@@ -394,13 +433,20 @@ export class SolanaAPI {
                     saiBalance = Number(tokenAccount.amount) / 1_000_000; // Assuming 6 decimals
                 } catch (error) {
                     // Check if the error is because the account doesn't exist
-                    if (error.message.includes('could not find account')) {
+                    if (error.message && (
+                        error.message.includes('could not find account') || 
+                        error.message.includes('TokenAccountNotFound')
+                    )) {
                         console.log('SAI token account not found, balance is 0');
                         
                         // Check if the user is the admin wallet
                         console.log(`Checking if user is admin wallet...`);
-                        const adminCheck = this.wallet.publicKey.toString() === '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1';
+                        const adminCheck = this.wallet.publicKey.toString() === tokenInfo.admin;
                         console.log(`User is admin wallet: ${adminCheck}`);
+                        
+                        if (adminCheck) {
+                            console.log('Admin wallet detected, you may need to mint tokens first');
+                        }
                     } else {
                         console.error('Error checking SAI balance:', error);
                     }

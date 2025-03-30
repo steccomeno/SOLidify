@@ -40,7 +40,14 @@ export const initializeAPI = (wallet) => {
             throw new Error('API INIT ERROR: Wallet object is null or undefined');
         }
 
-        if (!wallet.connected) {
+        if (!wallet.connected && window.solana && window.solana.isPhantom) {
+            console.log('API INIT - Wallet not showing as connected, checking Phantom directly...');
+            if (window.solana.isConnected) {
+                console.log('API INIT - Phantom reports connected status, proceeding anyway');
+            } else {
+                throw new Error('API INIT ERROR: Wallet is not connected');
+            }
+        } else if (!wallet.connected) {
             throw new Error('API INIT ERROR: Wallet is not connected');
         }
 

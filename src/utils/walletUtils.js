@@ -18,7 +18,19 @@ export const connection = new Connection(RPC_ENDPOINT, {
     commitment: 'confirmed',
     confirmTransactionInitialTimeout: 60000
 });
-console.log('Solana connection established');
+console.log('Solana connection established with endpoint:', RPC_ENDPOINT);
+
+// Add a function to check if the connection is active
+export const checkConnection = async () => {
+  try {
+    const version = await connection.getVersion();
+    console.log('Solana connection is active, version:', version);
+    return true;
+  } catch (error) {
+    console.error('Solana connection check failed:', error);
+    return false;
+  }
+};
 
 // Standalone wallet utility functions
 export const isWalletConnected = (wallet) => {
@@ -32,21 +44,67 @@ export const isWalletConnected = (wallet) => {
   return result;
 };
 
+// More robust connect wallet function
 export const connectWallet = async () => {
   try {
+    console.log('Attempting to connect wallet...');
+    
+    // Check if Phantom is installed
+    if (!window.solana || !window.solana.isPhantom) {
+      console.error('Phantom wallet not found');
+      return {
+        success: false,
+        wallet: null,
+        address: null,
+        error: 'Phantom wallet not installed'
+      };
+    }
+    
+    // Check if connection already exists
+    if (window.solana.isConnected) {
+      console.log('Wallet already connected');
+      const wallet = new PhantomWalletAdapter();
+      
+      try {
+        // Sometimes we need to refresh the connection
+        console.log('Refreshing existing connection...');
+        await wallet.connect();
+      } catch (refreshError) {
+        console.log('Error refreshing connection, using existing connection');
+      }
+      
+      return {
+        success: true,
+        wallet,
+        address: wallet.publicKey?.toString(),
+        message: 'Wallet connection reused'
+      };
+    }
+
+    // Create a new connection
+    console.log('Creating new wallet connection...');
     const wallet = new PhantomWalletAdapter();
     await wallet.connect();
+    console.log('Wallet connected successfully');
+
+    // Verify connection worked
+    if (!wallet.connected || !wallet.publicKey) {
+      throw new Error('Wallet connection succeeded but no public key available');
+    }
+
     return {
       success: true,
       wallet,
-      address: wallet.publicKey?.toString()
+      address: wallet.publicKey?.toString(),
+      message: 'Wallet connected successfully'
     };
   } catch (error) {
     console.error('Failed to connect wallet:', error);
     return {
       success: false,
       wallet: null,
-      address: null
+      address: null,
+      error: error.message || 'Unknown wallet connection error'
     };
   }
 };

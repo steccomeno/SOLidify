@@ -54,8 +54,24 @@ const SaiInterface = () => {
     const [activeLiquidations, setActiveLiquidations] = useState([]);
     const [showLiquidations, setShowLiquidations] = useState(false);
 
+    const [reconnectAttempts, setReconnectAttempts] = useState(0);
+    const [walletStatus, setWalletStatus] = useState('initializing');
+
     useEffect(() => {
         console.log("SaiInterface - Component mounted");
+        
+        // Try to auto-connect to Phantom on component mount
+        if (window.solana && window.solana.isPhantom && !connected) {
+            console.log("SaiInterface - Attempting to auto-connect to Phantom");
+            window.solana.connect({ onlyIfTrusted: true })
+                .then(() => {
+                    console.log("SaiInterface - Auto-connected to Phantom");
+                })
+                .catch(err => {
+                    console.log("SaiInterface - Auto-connect failed:", err.message);
+                });
+        }
+        
         return () => {
             console.log("SaiInterface - Component unmounted");
         };
@@ -70,8 +86,52 @@ const SaiInterface = () => {
         });
     }, [connected, wallet, publicKey]);
 
+    const attemptWalletReconnect = async () => {
+        if (reconnectAttempts >= 3) {
+            setError("Maximum reconnection attempts reached. Please try again later or refresh the page.");
+            return false;
+        }
+        
+        setWalletStatus('reconnecting');
+        setReconnectAttempts(prev => prev + 1);
+        
+        console.log("SaiInterface - Attempting wallet reconnect...");
+        try {
+            if (window.solana && window.solana.isPhantom) {
+                // Disconnect first to clear any stale state
+                try {
+                    await window.solana.disconnect();
+                    console.log("SaiInterface - Disconnected from Phantom");
+                } catch (e) {
+                    console.log("SaiInterface - Error disconnecting:", e);
+                }
+                
+                // Wait a bit
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Reconnect
+                await window.solana.connect();
+                console.log("SaiInterface - Reconnected to Phantom");
+                setWalletStatus('connected');
+                setError(null);
+                
+                // Wait a bit more before initializing
+                await new Promise(resolve => setTimeout(resolve, 500));
+                
+                // Try initializing again
+                await initializeWalletAndLoadData();
+                return true;
+            }
+        } catch (error) {
+            console.error("SaiInterface - Reconnect failed:", error);
+            setWalletStatus('error');
+        }
+        return false;
+    };
+
     const initializeWalletAndLoadData = async () => {
         console.log("SaiInterface - Initializing wallet and loading data");
+        setWalletStatus('initializing');
         
         if (connected && wallet && publicKey) {
             try {
@@ -91,13 +151,21 @@ const SaiInterface = () => {
                     try {
                         await initializeAPI(wallet);
                         console.log('SaiInterface - API initialized successfully');
+                        setWalletStatus('connected');
                     } catch (apiError) {
                         console.error('SaiInterface - API initialization failed:', apiError);
                         setError(`Failed to initialize API: ${apiError.message}`);
-                        return;
+                        setWalletStatus('error');
+                        
+                        // Try to reconnect if the error is related to wallet connection
+                        if (apiError.message.includes('Wallet is not connected')) {
+                            return await attemptWalletReconnect();
+                        }
+                        return false;
                     }
                 } else {
                     console.log('SaiInterface - API already initialized');
+                    setWalletStatus('connected');
                 }
 
                 // Load data only after API is initialized
@@ -109,13 +177,17 @@ const SaiInterface = () => {
                         loadActiveLiquidations()
                     ]);
                     console.log('SaiInterface - User data loaded successfully');
+                    return true;
                 } catch (dataError) {
                     console.error('SaiInterface - Failed to load user data:', dataError);
                     setError(`Failed to load user data: ${dataError.message}`);
+                    return false;
                 }
             } catch (error) {
                 console.error('SaiInterface - Failed to initialize:', error);
                 setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
+                setWalletStatus('error');
+                return false;
             }
         } else {
             console.log('SaiInterface - Wallet not ready:', {
@@ -123,6 +195,8 @@ const SaiInterface = () => {
                 hasWallet: !!wallet,
                 hasPublicKey: !!publicKey
             });
+            setWalletStatus('disconnected');
+            return false;
         }
     };
 
@@ -905,6 +979,15 @@ const SaiInterface = () => {
                             </div>
                             <div className="wallet-address">
                                 <span>{publicKey.toString().substring(0, 4)}...{publicKey.toString().substring(publicKey.toString().length - 4)}</span>
+                                {walletStatus === 'error' && (
+                                    <button 
+                                        className="reconnect-button"
+                                        onClick={attemptWalletReconnect}
+                                        disabled={reconnectAttempts >= 3}
+                                    >
+                                        Reconnect
+                                    </button>
+                                )}
                             </div>
                         </div>
                     )}
@@ -942,6 +1025,11 @@ const SaiInterface = () => {
                 <div className="error-message">
                     <p>{error}</p>
                     <button onClick={() => setError(null)}>Dismiss</button>
+                    {error.includes('Wallet is not connected') && (
+                        <button onClick={attemptWalletReconnect}>
+                            Try Reconnecting
+                        </button>
+                    )}
                 </div>
             )}
             
