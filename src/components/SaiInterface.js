@@ -64,6 +64,12 @@ const SaiInterface = () => {
 
     const [balances, setBalances] = useState({ sol: 0, sai: 0, sld: 0 });
 
+    // Add missing variables and states
+    const [mintAmount, setMintAmount] = useState(100);
+    const [mintingInProgress, setMintingInProgress] = useState(false);
+    const [selectedCdp, setSelectedCdp] = useState(null);
+    const [connectionError, setConnectionError] = useState(null);
+
     useEffect(() => {
         console.log("SaiInterface - Component mounted");
         
@@ -687,21 +693,38 @@ const SaiInterface = () => {
     };
 
     const handleMintTestSAI = async () => {
+        if (!mintAmount || isNaN(mintAmount) || mintAmount <= 0) {
+            setError({
+                message: 'Please enter a valid amount to mint',
+                recoverable: true
+            });
+            return;
+        }
+        
+        setMintingInProgress(true);
         try {
-            setLoading(true);
-            const result = await mintTestSAI(10); // Mint 10 SAI
+            const result = await mintTestSAI(parseFloat(mintAmount));
+            
             if (result.success) {
-                alert('Successfully minted test SAI tokens');
-                // Refresh balances
-                await loadWalletData();
+                // Show success message
+                alert(`Successfully minted ${mintAmount} SAI tokens!`);
+                // Refresh wallet data
+                loadTokenBalances();
             } else {
-                alert(`Failed to mint: ${result.error}`);
+                // Show error message
+                setError({
+                    message: `Failed to mint SAI: ${result.error}`,
+                    recoverable: true
+                });
             }
         } catch (error) {
             console.error('Error minting SAI:', error);
-            alert(`Error: ${error.message}`);
+            setError({
+                message: `Error minting SAI: ${error.message}`,
+                recoverable: true
+            });
         } finally {
-            setLoading(false);
+            setMintingInProgress(false);
         }
     };
 
@@ -1234,50 +1257,166 @@ const SaiInterface = () => {
 
     // Add improved error handling for program initialization failures
     async function initializeWallet() {
+        setInitializing(true);
+        setError(null);
+        
         try {
-            // ... existing code ...
+            console.log('Initializing wallet connection...');
             
-            // Initialize the API
-            await initializeAPI(wallet);
+            // Check if Phantom is installed
+            if (!window.solana || !window.solana.isPhantom) {
+                throw new Error('Phantom wallet not installed. Please install Phantom to continue.');
+            }
             
-            // Load wallet data
-            await loadWalletData();
-        } catch (error) {
-            console.error('Error initializing wallet:', error);
+            // Check if connected to Devnet
+            try {
+                const network = await window.solana.request({ method: 'getNetwork' });
+                console.log('Current network:', network);
+                if (network && network.name !== 'devnet') {
+                    setError({
+                        message: `Please connect to Devnet network in Phantom wallet. Current network: ${network.name}`,
+                        recoverable: true
+                    });
+                    setInitializing(false);
+                    return false;
+                }
+            } catch (networkError) {
+                console.log('Unable to check network:', networkError);
+                // Continue anyway, as this may fail in some wallet versions
+            }
             
-            let errorMessage = error.message;
-            let canRetry = false;
+            // First try connecting using the direct Phantom API
+            try {
+                console.log('Connecting using direct Phantom API...');
+                await window.solana.connect({ onlyIfTrusted: false });
+                console.log('Connected to Phantom wallet');
+            } catch (phantomError) {
+                console.error('Error connecting to Phantom directly:', phantomError);
+                
+                if (phantomError.message && phantomError.message.includes('User rejected')) {
+                    setError({
+                        message: 'Connection rejected by user. Please try again.',
+                        recoverable: true
+                    });
+                    setInitializing(false);
+                    return false;
+                }
+            }
             
-            // Make the error message more user-friendly
-            if (errorMessage.includes('Failed to initialize Solana program')) {
-                // Check if there's more specific error information from the API
-                if (window.solanaInitError) {
-                    errorMessage = window.solanaInitError.message;
+            // Check if connection was successful
+            if (!window.solana.isConnected) {
+                throw new Error('Failed to connect to wallet. Please try again.');
+            }
+            
+            // Get the wallet adapter from the context
+            const wallet = {
+                publicKey: window.solana.publicKey,
+                connected: true,
+                signTransaction: async (transaction) => {
+                    try {
+                        // Use direct Phantom API which is more reliable
+                        const signed = await window.solana.signTransaction(transaction);
+                        return signed;
+                    } catch (error) {
+                        console.error('Error signing transaction:', error);
+                        
+                        // Check for user rejection
+                        if (error.message && error.message.includes('rejected')) {
+                            throw new Error('Transaction rejected by user');
+                        }
+                        
+                        throw error;
+                    }
+                },
+                signAllTransactions: async (transactions) => {
+                    try {
+                        // Use direct Phantom API which is more reliable
+                        const signed = await window.solana.signAllTransactions(transactions);
+                        return signed;
+                    } catch (error) {
+                        console.error('Error signing multiple transactions:', error);
+                        
+                        // Check for user rejection
+                        if (error.message && error.message.includes('rejected')) {
+                            throw new Error('Transactions rejected by user');
+                        }
+                        
+                        throw error;
+                    }
+                },
+                signAndSendTransaction: async (transaction) => {
+                    try {
+                        // Use direct Phantom API which is more reliable
+                        const { signature } = await window.solana.signAndSendTransaction(transaction);
+                        return signature;
+                    } catch (error) {
+                        console.error('Error signing and sending transaction:', error);
+                        
+                        // Check for user rejection
+                        if (error.message && error.message.includes('rejected')) {
+                            throw new Error('Transaction rejected by user');
+                        }
+                        
+                        throw error;
+                    }
+                }
+            };
+            
+            console.log('Wallet connected with public key:', wallet.publicKey.toString());
+            
+            // Try to initialize the API
+            try {
+                console.log('Initializing API with connected wallet...');
+                await initializeAPI(wallet);
+                console.log('API initialized successfully');
+                
+                // Load initial data
+                console.log('Loading initial data...');
+                loadWalletData();
+                loadUserCDPs();
+                
+                setInitializing(false);
+                return true;
+            } catch (apiError) {
+                console.error('Error initializing API:', apiError);
+                
+                // Special handling for programmatic errors
+                if (apiError.message.includes('Program')) {
+                    // Set a more user-friendly error message
+                    setError({
+                        message: `Failed to initialize Solana program: ${apiError.message}`,
+                        detail: 'This could be due to network issues or Solana network congestion.',
+                        recoverable: true
+                    });
                     
-                    // Determine if we can retry
-                    canRetry = errorMessage.includes('Rate limit') || 
-                              errorMessage.includes('Network error') || 
-                              errorMessage.includes('timeout');
-                }
-                
-                // Format a more user-friendly message
-                errorMessage = `The Solana program could not be loaded. ${errorMessage}`;
-                
-                // Add recovery instructions
-                if (canRetry) {
-                    errorMessage += ' Please try again in a moment or refresh the page.';
+                    // Set retry action
+                    setRetryAction(() => initializeWallet);
                 } else {
-                    errorMessage += ' Please check your network connection and wallet.';
+                    // Generic error
+                    setError({
+                        message: apiError.message,
+                        recoverable: true
+                    });
                 }
+                
+                setInitializing(false);
+                return false;
             }
+        } catch (error) {
+            console.error('Fatal error initializing wallet:', error);
             
-            setError(errorMessage);
+            // Set user-friendly error
+            setError({
+                message: `Wallet connection error: ${error.message}`,
+                detail: error.stack,
+                recoverable: true
+            });
+            
+            // Set retry action
+            setRetryAction(() => initializeWallet);
+            
             setInitializing(false);
-            
-            // If it's a potentially recoverable error, add a retry button
-            if (canRetry) {
-                setRetryAction(() => initializeWallet);
-            }
+            return false;
         }
     }
 
@@ -1305,11 +1444,39 @@ const SaiInterface = () => {
     };
 
     // Also fix the Dismiss button for the error message at the top
-    const ErrorMessage = ({ message, onDismiss }) => {
+    const ErrorMessage = ({ message, detail, onDismiss }) => {
+        // Check if it's an object with message property
+        const errorMsg = typeof message === 'object' && message.message 
+            ? message.message 
+            : message;
+        
+        // Check if it has additional details
+        const errorDetail = detail || (typeof message === 'object' && message.detail);
+        
+        // Determine error type for styling
+        const isWarning = errorMsg && (
+            errorMsg.includes('Please connect to Devnet') ||
+            errorMsg.includes('Connection rejected by user')
+        );
+        
+        const isRejection = errorMsg && errorMsg.includes('rejected');
+        
+        // Apply different classes based on error type
+        const errorClass = isWarning ? 'error-warning' : isRejection ? 'error-rejection' : 'error-critical';
+        
         return (
-            <div className="error-message">
-                <p>{message}</p>
-                <button onClick={onDismiss}>Dismiss</button>
+            <div className={`error-container ${errorClass}`}>
+                <div className="error-message">
+                    <div className="error-header">
+                        <span className="error-icon">⚠️</span>
+                        <span className="error-title">{isWarning ? 'Warning' : isRejection ? 'Transaction Rejected' : 'Error'}</span>
+                        {onDismiss && <button className="dismiss-button" onClick={onDismiss}>×</button>}
+                    </div>
+                    <div className="error-content">
+                        {errorMsg}
+                        {errorDetail && <div className="error-detail">{errorDetail}</div>}
+                    </div>
+                </div>
             </div>
         );
     };
@@ -1356,159 +1523,92 @@ const SaiInterface = () => {
 
     // Main render function
     return (
-        <div className="sai-interface-container">
-            <div className="header">
-                <h1>SAI Stablecoin Interface</h1>
-                <div className="wallet-section">
-                    {!connected ? (
-                        <div className="connect-wallet-prompt">
-                            <WalletMultiButton />
-                            <p>Connect your wallet to manage SAI stablecoins</p>
-                        </div>
-                    ) : (
-                        <div className="wallet-info">
-                            <div className="wallet-balance">
-                                <div className="balance-item">
-                                    <span className="balance-label">SOL Balance:</span>
-                                    <span className="balance-value">{walletBalance.sol.toFixed(4)} SOL</span>
-                                </div>
-                                <div className="balance-item">
-                                    <span className="balance-label">SAI Balance:</span>
-                                    <span className="balance-value">{walletBalance.sai.toFixed(2)} SAI</span>
-                                </div>
-                                <button 
-                                    className="add-token-button"
-                                    onClick={() => {
-                                        if (window.solanaAPI) {
-                                            window.solanaAPI.addSAIToPhantomWallet()
-                                                .then(result => {
-                                                    if (result.success) {
-                                                        alert('SAI token added successfully to Phantom wallet!');
-                                                    } else {
-                                                        alert('Error adding SAI token: ' + result.error);
-                                                    }
-                                                })
-                                                .catch(err => {
-                                                    alert('Failed to add SAI token: ' + err.message);
-                                                });
-                                        } else {
-                                            alert('Please connect your wallet first');
-                                        }
-                                    }}
-                                >
-                                    Add SAI to Phantom
-                                </button>
-                            </div>
-                            <div className="wallet-address">
-                                <span>{publicKey.toString().substring(0, 4)}...{publicKey.toString().substring(publicKey.toString().length - 4)}</span>
-                                {walletStatus === 'error' && (
-                                    <button 
-                                        className="reconnect-button"
-                                        onClick={attemptWalletReconnect}
-                                        disabled={reconnectAttempts >= 3}
-                                    >
-                                        Reconnect
-                                    </button>
-                                )}
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {connected && (
-                <div className="sai-tabs">
-                    <button 
-                        className={view === 'list' ? 'active' : ''} 
-                        onClick={() => setView('list')}>
-                        My Vaults
-                    </button>
-                    <button 
-                        className={view === 'create' ? 'active' : ''} 
-                        onClick={() => setView('create')}>
-                        Create Vault
-                    </button>
-                    <button 
-                        className={view === 'transfer' ? 'active' : ''} 
-                        onClick={() => setView('transfer')}>
-                        Transfer SAI
-                    </button>
-                    {showLiquidations && (
-                        <button 
-                            className={view === 'liquidations' ? 'active' : ''} 
-                            onClick={() => setView('liquidations')}>
-                            Liquidation Auctions
-                        </button>
-                    )}
-                </div>
-            )}
+        <div className="sai-interface">
+            <h1>SAI Stablecoin Interface</h1>
             
             {error && (
-                <div className="error-container">
-                    <ErrorMessage 
-                        message={error} 
-                        onDismiss={dismissError} 
-                    />
-                </div>
+                <ErrorMessage 
+                    message={error.message || error} 
+                    detail={error.detail}
+                    onDismiss={dismissError} 
+                />
             )}
             
-            {!connected ? (
-                <div className="sai-landing">
-                    <div className="sai-info">
-                        <h2>What is SAI?</h2>
-                        <p>SAI is a decentralized stablecoin built on Solana, backed by crypto collateral. Create a vault, deposit collateral, and mint SAI tokens pegged to the US dollar.</p>
-                        
-                        <h3>Key Benefits</h3>
+            {retryAction && error && error.recoverable && <RetryButton />}
+            
+            {initializing && (
+                <div className="loading-state">
+                    <p>Initializing wallet connection...</p>
+                    <div className="spinner"></div>
+                </div>
+            )}
+
+            {!initializing && !isAPIInitialized() && !error && (
+                <div className="connect-wallet-container">
+                    <p>Please connect your wallet to use the application</p>
+                    <button onClick={initializeWallet} className="connect-button">Connect Wallet</button>
+                    <div className="wallet-instructions">
+                        <p>Make sure you have:</p>
                         <ul>
-                            <li>Fully collateralized and transparent</li>
-                            <li>Governed by token holders</li>
-                            <li>Fast and inexpensive transactions on Solana</li>
+                            <li>Phantom wallet installed</li>
+                            <li>Switched to Devnet network</li>
+                            <li>Some SOL in your wallet</li>
                         </ul>
                     </div>
                 </div>
-            ) : (
-                <div className="sai-main">
-                    {loading && (
-                        <div className="loading-overlay">
-                        <div className="loading-spinner"></div>
-                        <p>Loading...</p>
+            )}
+            
+            {isAPIInitialized() && (
+                <>
+                    <div className="wallet-info">
+                        <h2>Wallet</h2>
+                        <p>SOL Balance: {balances.sol.toFixed(4)} SOL</p>
+                        <p>SAI Balance: {balances.sai.toFixed(4)} SAI</p>
+                        <button onClick={refreshWalletData} className="refresh-button">Refresh</button>
                     </div>
-                    )}
                     
-                    {view === 'list' && renderCDPList()}
-                    {view === 'create' && renderCreateCDPForm()}
-                    {view === 'detail' && renderCDPDetail()}
-                    {view === 'transfer' && (
-                        <SaiTransfer 
-                            onSuccess={refreshWalletData} 
-                            walletBalance={walletBalance} 
-                        />
+                    <div className="cdp-section">
+                        <h2>Your CDPs</h2>
+                        {loading ? (
+                            <p>Loading CDPs...</p>
+                        ) : (
+                            <>
+                                {cdps.length === 0 ? (
+                                    <p>You don't have any CDPs yet.</p>
+                                ) : (
+                                    renderCDPList()
+                                )}
+                                
+                                {renderCreateCDPForm()}
+                            </>
+                        )}
+                    </div>
+                    
+                    {selectedCDP && renderCDPDetail()}
+                    
+                    {/* Conditionally show test minting section for admin */}
+                    {balances.publicKey === '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1' && (
+                        <div className="admin-section">
+                            <h2>Admin Functions</h2>
+                            <p>As admin, you can mint test SAI tokens</p>
+                            <div className="input-group">
+                                <input
+                                    type="number"
+                                    value={mintAmount}
+                                    onChange={(e) => setMintAmount(e.target.value)}
+                                    placeholder="Amount of SAI to mint"
+                                />
+                                <button onClick={handleMintTestSAI} disabled={mintingInProgress}>
+                                    {mintingInProgress ? 'Minting...' : 'Mint Test SAI'}
+                                </button>
+                            </div>
+                        </div>
                     )}
-                    {view === 'liquidations' && renderActiveLiquidations()}
-                </div>
+                </>
             )}
-
-            {publicKey && publicKey.toString() === '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1' && (
-                <div className="admin-section">
-                    <h3>Admin Controls</h3>
-                    <button 
-                        className="admin-button"
-                        onClick={handleMintTestSAI}
-                        disabled={loading}
-                    >
-                        {loading ? 'Processing...' : 'Mint Test SAI (Admin Only)'}
-                    </button>
-                </div>
-            )}
-
-            {renderConnectionRecoveryOption()}
-
-            {error && (
-                <div className="error-container">
-                    <div className="error-message">{error}</div>
-                    <RetryButton />
-                </div>
-            )}
+            
+            {/* Add network recovery option if applicable */}
+            {connectionError && renderConnectionRecoveryOption()}
         </div>
     );
 };
