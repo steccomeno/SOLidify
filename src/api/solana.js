@@ -112,22 +112,51 @@ export class SolanaAPI {
         if (!wallet.sendTransaction || typeof wallet.sendTransaction !== 'function') {
             if (window.solana && typeof window.solana.signAndSendTransaction === 'function') {
                 console.log('Patching wallet.sendTransaction with window.solana.signAndSendTransaction');
-                wallet.sendTransaction = (...args) => window.solana.signAndSendTransaction(...args);
+                wallet.sendTransaction = async (transaction, connection = this.connection, options = {}) => {
+                    console.log('Using patched signAndSendTransaction method');
+                    
+                    // Ensure transaction has a recent blockhash
+                    if (!transaction.recentBlockhash) {
+                        console.log('Transaction missing recentBlockhash, adding it now');
+                        const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+                        transaction.recentBlockhash = blockhash;
+                    }
+                    
+                    return window.solana.signAndSendTransaction(transaction);
+                };
             } else if (window.solana && typeof window.solana.sendTransaction === 'function') {
                 console.log('Patching wallet.sendTransaction with window.solana.sendTransaction');
-                wallet.sendTransaction = (...args) => window.solana.sendTransaction(...args);
+                wallet.sendTransaction = async (transaction, connection = this.connection, options = {}) => {
+                    console.log('Using patched sendTransaction method');
+                    
+                    // Ensure transaction has a recent blockhash
+                    if (!transaction.recentBlockhash) {
+                        console.log('Transaction missing recentBlockhash, adding it now');
+                        const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+                        transaction.recentBlockhash = blockhash;
+                    }
+                    
+                    return window.solana.sendTransaction(transaction, options);
+                };
             } else {
                 // Create a custom sendTransaction that uses signTransaction and our connection
                 console.log('Creating custom sendTransaction method using signTransaction');
-                wallet.sendTransaction = async (transaction, connection, options = {}) => {
+                wallet.sendTransaction = async (transaction, connection = this.connection, options = {}) => {
                     console.log('Custom sendTransaction called with transaction:', transaction);
                     try {
+                        // Ensure transaction has a recent blockhash
+                        if (!transaction.recentBlockhash) {
+                            console.log('Transaction missing recentBlockhash, adding it now');
+                            const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                            transaction.recentBlockhash = blockhash;
+                        }
+                        
                         // Sign the transaction
                         const signedTx = await wallet.signTransaction(transaction);
                         console.log('Transaction signed successfully');
                         
                         // Send the signed transaction
-                        const signature = await this.connection.sendRawTransaction(
+                        const signature = await connection.sendRawTransaction(
                             signedTx.serialize(),
                             options
                         );
@@ -135,7 +164,7 @@ export class SolanaAPI {
                         
                         // Confirm the transaction if requested
                         if (options.skipPreflight !== true) {
-                            const confirmation = await this.connection.confirmTransaction(
+                            const confirmation = await connection.confirmTransaction(
                                 signature,
                                 options.commitment || 'confirmed'
                             );
@@ -243,8 +272,32 @@ export class SolanaAPI {
                     .instruction()
             );
 
-            const signature = await this.wallet.sendTransaction(transaction);
+            // Add a recent blockhash to the transaction
+            try {
+                const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+                transaction.recentBlockhash = blockhash;
+                console.log('Added recentBlockhash to transaction:', blockhash);
+            } catch (error) {
+                console.error('Error getting blockhash:', error);
+                throw error;
+            }
+
+            // Set the fee payer
+            transaction.feePayer = this.wallet.publicKey;
+
+            console.log('Prepared transaction:', {
+                hasBlockhash: !!transaction.recentBlockhash,
+                numInstructions: transaction.instructions.length,
+                feePayer: transaction.feePayer?.toString()
+            });
+
+            // Send the transaction
+            console.log('Sending transaction to wallet for signing and broadcasting...');
+            const signature = await this.wallet.sendTransaction(transaction, this.connection);
+            console.log('Transaction sent with signature:', signature);
+            
             await this.connection.confirmTransaction(signature);
+            console.log('Transaction confirmed!');
 
             return {
                 success: true,

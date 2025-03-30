@@ -160,8 +160,23 @@ const SaiInterface = () => {
                                 ((tx) => window.solana.signTransaction(tx)),
                             // Also add the sendTransaction method which is needed for most operations
                             sendTransaction: wallet.sendTransaction || 
-                                ((tx, connection, options) => {
+                                (async (tx, connection, options = {}) => {
                                     console.log('Using patched sendTransaction from Phantom');
+                                    
+                                    // Ensure transaction has a recent blockhash 
+                                    if (!tx.recentBlockhash) {
+                                        console.log('Transaction missing recentBlockhash, adding it now');
+                                        try {
+                                            const { blockhash } = await connection.getLatestBlockhash('confirmed');
+                                            tx.recentBlockhash = blockhash;
+                                            console.log('Added recentBlockhash to transaction:', blockhash);
+                                        } catch (error) {
+                                            console.error('Error getting blockhash:', error);
+                                            throw error;
+                                        }
+                                    }
+                                    
+                                    // Use the appropriate method from Phantom to send the transaction
                                     return window.solana.signAndSendTransaction ? 
                                         window.solana.signAndSendTransaction(tx) : 
                                         window.solana.sendTransaction(tx);
