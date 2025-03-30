@@ -370,11 +370,72 @@ export const initializeAPI = async (wallet) => {
         solanaAPI = new SolanaAPI(wallet, PROGRAM_ID.toString());
         
         // Initialize the API with the connection
-        await solanaAPI.ensureConnection();
-        const programInitResult = await solanaAPI.initialize();
-        
-        if (!programInitResult) {
-            throw new Error('Failed to initialize Solana program');
+        try {
+            await solanaAPI.ensureConnection();
+            console.log('Connection ensured, initializing program...');
+            
+            const programInitResult = await solanaAPI.initialize();
+            
+            if (!programInitResult) {
+                // Check if we have specific error information
+                if (window.solanaInitError) {
+                    console.error('Program initialization failed with error:', window.solanaInitError.message);
+                    console.error('Original error:', window.solanaInitError.originalError);
+                    
+                    // If it's a rate limit or network issue, we can try to recover
+                    if (window.solanaInitError.message.includes('Rate limit') || 
+                        window.solanaInitError.message.includes('Network error')) {
+                        
+                        console.log('Attempting recovery with different connection...');
+                        
+                        // Try a different endpoint
+                        await refreshConnection();
+                        
+                        // Wait a moment
+                        await new Promise(resolve => setTimeout(resolve, 3000));
+                        
+                        // Try initialization again
+                        const secondAttemptResult = await solanaAPI.initialize();
+                        
+                        if (!secondAttemptResult) {
+                            throw new Error(`Failed to initialize Solana program after multiple attempts: ${window.solanaInitError.message}`);
+                        } else {
+                            console.log('Program initialization succeeded on second attempt');
+                        }
+                    } else {
+                        throw new Error(`Failed to initialize Solana program: ${window.solanaInitError.message}`);
+                    }
+                } else {
+                    throw new Error('Failed to initialize Solana program: Unknown error');
+                }
+            }
+        } catch (initError) {
+            console.error('Program initialization failed:', initError);
+            
+            // Check if we have a fallback method for simple operations
+            console.log('Attempting to configure minimal API functionality...');
+            
+            // Set up minimal functionality
+            solanaAPI.program = null;
+            solanaAPI.getTokenBalances = async function() {
+                try {
+                    // Basic SOL balance check that doesn't require program
+                    if (this.wallet && this.wallet.publicKey && this.connection) {
+                        const solBalance = await this.connection.getBalance(this.wallet.publicKey);
+                        return {
+                            sol: solBalance / 1_000_000_000,
+                            sai: 0
+                        };
+                    }
+                    return { sol: 0, sai: 0 };
+                } catch (e) {
+                    console.error('Error in minimal getTokenBalances:', e);
+                    return { sol: 0, sai: 0 };
+                }
+            };
+            
+            // Throw the original error for handling
+            throw initError;
         }
         
         // Make the API available globally for debugging

@@ -161,17 +161,21 @@ export class SolanaAPI {
         }
     }
 
-    // Update the initialize method to use our connection utilities
+    // Update the initialize method with better error diagnostics
     async initialize() {
         try {
             if (!this.wallet || !this.wallet.publicKey) {
+                console.error('Initialize failed: Wallet not connected or missing public key');
                 throw new Error('Wallet not connected');
             }
             
             // Ensure we have a connection
+            console.log('Ensuring connection is available...');
             await this.ensureConnection();
+            console.log('Connection confirmed');
             
             // Create provider with current wallet
+            console.log('Creating AnchorProvider with wallet:', this.wallet.publicKey.toString());
             const walletAdapterConnected = {
                 publicKey: this.wallet.publicKey,
                 signTransaction: this.wallet.signTransaction,
@@ -184,38 +188,145 @@ export class SolanaAPI {
                 walletAdapterConnected,
                 { preflightCommitment: 'confirmed' }
             );
+            console.log('AnchorProvider created successfully');
             
             // Load the IDL from the program
-            console.log('Loading program IDL... (this can take a moment)');
-            const idl = await Program.fetchIdl(this.programId, this.provider);
-            
-            if (!idl) {
-                throw new Error('Failed to load IDL');
+            console.log('Loading program IDL from program ID:', this.programId.toString());
+            try {
+                const idl = await Program.fetchIdl(this.programId, this.provider);
+                
+                if (!idl) {
+                    console.error('IDL fetch returned null or undefined');
+                    throw new Error('Failed to load IDL: No data returned');
+                }
+                
+                console.log('IDL loaded successfully:', {
+                    name: idl.name,
+                    instructions: idl.instructions?.length || 0,
+                    accounts: idl.accounts?.length || 0,
+                    version: idl.version
+                });
+                
+                // Create the program instance
+                this.program = new Program(idl, this.programId, this.provider);
+                console.log('Program initialized with IDL');
+                
+                return true;
+            } catch (idlError) {
+                console.error('Error fetching IDL:', idlError);
+                
+                // Try with a small delay and retry
+                console.log('Retrying IDL fetch after a short delay...');
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                try {
+                    const idl = await Program.fetchIdl(this.programId, this.provider);
+                    if (!idl) {
+                        throw new Error('Failed to load IDL on retry');
+                    }
+                    
+                    this.program = new Program(idl, this.programId, this.provider);
+                    console.log('Program initialized with IDL on retry');
+                    return true;
+                } catch (retryError) {
+                    console.error('IDL fetch retry failed:', retryError);
+                    
+                    // Fall back to using a static IDL if available
+                    console.log('Attempting to use static IDL as fallback...');
+                    try {
+                        // Static IDL from a local copy
+                        const staticIdl = {
+                            version: "0.1.0",
+                            name: "sai",
+                            instructions: [
+                                {
+                                    name: "initializeCdp",
+                                    accounts: [
+                                        { name: "owner", isMut: true, isSigner: true },
+                                        { name: "cdp", isMut: true, isSigner: true },
+                                        { name: "ownerCollateral", isMut: true, isSigner: false },
+                                        { name: "collateralMint", isMut: false, isSigner: false },
+                                        { name: "vault", isMut: true, isSigner: false },
+                                        { name: "vaultAuthority", isMut: false, isSigner: false },
+                                        { name: "saiMint", isMut: true, isSigner: false },
+                                        { name: "ownerSai", isMut: true, isSigner: false },
+                                        { name: "mintAuthority", isMut: false, isSigner: false },
+                                        { name: "tokenProgram", isMut: false, isSigner: false },
+                                        { name: "systemProgram", isMut: false, isSigner: false },
+                                        { name: "rent", isMut: false, isSigner: false }
+                                    ],
+                                    args: [
+                                        { name: "collateralAmount", type: "u64" },
+                                        { name: "saiAmount", type: "u64" }
+                                    ]
+                                }
+                            ],
+                            accounts: [],
+                            errors: []
+                        };
+                        
+                        this.program = new Program(staticIdl, this.programId, this.provider);
+                        console.log('Program initialized with static IDL fallback');
+                        return true;
+                    } catch (fallbackError) {
+                        console.error('Static IDL fallback failed:', fallbackError);
+                        throw new Error(`Failed to initialize program: ${fallbackError.message}`);
+                    }
+                }
             }
-            
-            console.log('IDL loaded successfully');
-            
-            // Create the program instance
-            this.program = new Program(idl, this.programId, this.provider);
-            console.log('Program initialized with IDL');
-            
-            return true;
         } catch (error) {
             console.error('Error initializing Solana API:', error);
             
-            // If this is a rate limit error, try refreshing the connection
+            // Provide a more descriptive error message
+            let errorMessage = `Program initialization failed: ${error.message}`;
+            
             if (error.message?.includes('429') || 
                 error.message?.includes('rate limit') || 
                 error.message?.includes('Connection rate limits exceeded')) {
                 
-                console.log('Rate limit during initialization, refreshing connection...');
-                await refreshConnection();
+                errorMessage = 'Rate limit reached while initializing program. Please try again later.';
+                console.log(errorMessage);
                 
-                // Try again with a slight delay
+                // Try refreshing connection
+                await refreshConnection();
                 await wait(1000);
-                return this.initialize();
+                
+                // Don't throw, just return false to indicate failure
+                return false;
             }
             
+            // Check for network issues
+            if (error.message?.includes('network') || 
+                error.message?.includes('connect') ||
+                error.message?.includes('timeout')) {
+                
+                errorMessage = 'Network error while initializing program. Please check your internet connection.';
+                console.log(errorMessage);
+                
+                // Don't throw, just return false to indicate failure
+                return false;
+            }
+            
+            // Check for specific authorization issues
+            if (error.message?.includes('unauthorized') || 
+                error.message?.includes('permission') ||
+                error.message?.includes('access denied')) {
+                
+                errorMessage = 'Authorization error. Your wallet may not have permission to perform this operation.';
+                console.log(errorMessage);
+            }
+            
+            // Add error details to window for debugging
+            if (typeof window !== 'undefined') {
+                window.solanaInitError = {
+                    message: errorMessage,
+                    originalError: error.message,
+                    stack: error.stack,
+                    timestamp: new Date().toISOString()
+                };
+            }
+            
+            // Return false instead of throwing to allow fallback handling in API
             return false;
         }
     }

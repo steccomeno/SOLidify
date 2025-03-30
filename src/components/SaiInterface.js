@@ -58,6 +58,9 @@ const SaiInterface = () => {
     const [reconnectAttempts, setReconnectAttempts] = useState(0);
     const [walletStatus, setWalletStatus] = useState('initializing');
 
+    const [retryAction, setRetryAction] = useState(null);
+    const [initializing, setInitializing] = useState(false);
+
     useEffect(() => {
         console.log("SaiInterface - Component mounted");
         
@@ -130,16 +133,16 @@ const SaiInterface = () => {
         return false;
     };
 
-        const initializeWalletAndLoadData = async () => {
+    const initializeWalletAndLoadData = async () => {
         console.log("SaiInterface - Initializing wallet and loading data");
         setWalletStatus('initializing');
         
         if (connected && wallet) {
-                try {
+            try {
                 console.log('SaiInterface - Wallet connected:', {
-                        connected,
-                        hasWallet: !!wallet,
-                        hasPublicKey: !!publicKey,
+                    connected,
+                    hasWallet: !!wallet,
+                    hasPublicKey: !!publicKey,
                     publicKeyStr: publicKey?.toString()
                 });
 
@@ -216,11 +219,11 @@ const SaiInterface = () => {
                     }
                 }
 
-                    // Clear any existing errors
-                    setError(null);
+                // Clear any existing errors
+                setError(null);
 
-                    // Initialize API if not already initialized
-                    if (!isAPIInitialized()) {
+                // Initialize API if not already initialized
+                if (!isAPIInitialized()) {
                     console.log('SaiInterface - API not initialized, initializing now...');
                     try {
                         await initializeAPI(wallet);
@@ -241,9 +244,9 @@ const SaiInterface = () => {
                 } else {
                     console.log('SaiInterface - API already initialized');
                     setWalletStatus('connected');
-                    }
+                }
 
-                    // Load data only after API is initialized
+                // Load data only after API is initialized
                 console.log('SaiInterface - Loading user data...');
                 try {
                     await Promise.all([
@@ -258,9 +261,9 @@ const SaiInterface = () => {
                     setError(`Failed to load user data: ${dataError.message}`);
                     return false;
                 }
-                } catch (error) {
+            } catch (error) {
                 console.error('SaiInterface - Failed to initialize:', error);
-                    setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
+                setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
                 setWalletStatus('error');
                 return false;
             }
@@ -504,7 +507,7 @@ const SaiInterface = () => {
             while (retryCount < 2) {
                 try {
                     result = await createCDP(collateral, sai);
-            console.log('CDP creation result:', result);
+                    console.log('CDP creation result:', result);
                     break; // If successful, exit the loop
                 } catch (error) {
                     console.error(`CDP creation attempt ${retryCount+1} failed:`, error);
@@ -1206,6 +1209,78 @@ const SaiInterface = () => {
         return null;
     };
 
+    // Add improved error handling for program initialization failures
+    async function initializeWallet() {
+        try {
+            // ... existing code ...
+            
+            // Initialize the API
+            await initializeAPI(wallet);
+            
+            // Load wallet data
+            await loadWalletData();
+        } catch (error) {
+            console.error('Error initializing wallet:', error);
+            
+            let errorMessage = error.message;
+            let canRetry = false;
+            
+            // Make the error message more user-friendly
+            if (errorMessage.includes('Failed to initialize Solana program')) {
+                // Check if there's more specific error information from the API
+                if (window.solanaInitError) {
+                    errorMessage = window.solanaInitError.message;
+                    
+                    // Determine if we can retry
+                    canRetry = errorMessage.includes('Rate limit') || 
+                              errorMessage.includes('Network error') || 
+                              errorMessage.includes('timeout');
+                }
+                
+                // Format a more user-friendly message
+                errorMessage = `The Solana program could not be loaded. ${errorMessage}`;
+                
+                // Add recovery instructions
+                if (canRetry) {
+                    errorMessage += ' Please try again in a moment or refresh the page.';
+                } else {
+                    errorMessage += ' Please check your network connection and wallet.';
+                }
+            }
+            
+            setError(errorMessage);
+            setInitializing(false);
+            
+            // If it's a potentially recoverable error, add a retry button
+            if (canRetry) {
+                setRetryAction(() => initializeWallet);
+            }
+        }
+    }
+
+    // Add a retry button component
+    const RetryButton = () => {
+        if (!retryAction) return null;
+        
+        return (
+            <div className="retry-container">
+                <button 
+                    className="retry-button"
+                    onClick={() => {
+                        setError(null);
+                        setInitializing(true);
+                        retryAction();
+                    }}
+                >
+                    Retry Connection
+                </button>
+                <p className="retry-hint">
+                    If the issue persists, try switching to a different network in your wallet settings.
+                </p>
+            </div>
+        );
+    };
+
     // Main render function
     return (
         <div className="sai-interface-container">
@@ -1223,12 +1298,12 @@ const SaiInterface = () => {
                                 <div className="balance-item">
                                     <span className="balance-label">SOL Balance:</span>
                                     <span className="balance-value">{walletBalance.sol.toFixed(4)} SOL</span>
-                    </div>
+                                </div>
                                 <div className="balance-item">
                                     <span className="balance-label">SAI Balance:</span>
                                     <span className="balance-value">{walletBalance.sai.toFixed(2)} SAI</span>
-                </div>
-                    <button 
+                                </div>
+                                <button 
                                     className="add-token-button"
                                     onClick={() => {
                                         if (window.solanaAPI) {
@@ -1249,24 +1324,24 @@ const SaiInterface = () => {
                                     }}
                                 >
                                     Add SAI to Phantom
-                    </button>
+                                </button>
                             </div>
                             <div className="wallet-address">
                                 <span>{publicKey.toString().substring(0, 4)}...{publicKey.toString().substring(publicKey.toString().length - 4)}</span>
                                 {walletStatus === 'error' && (
-                    <button 
+                                    <button 
                                         className="reconnect-button"
                                         onClick={attemptWalletReconnect}
                                         disabled={reconnectAttempts >= 3}
-                    >
+                                    >
                                         Reconnect
-                    </button>
+                                    </button>
                                 )}
                             </div>
                         </div>
                     )}
                 </div>
-                </div>
+            </div>
 
             {connected && (
                 <div className="sai-tabs">
@@ -1330,9 +1405,9 @@ const SaiInterface = () => {
                     </div>
                     )}
                     
-                        {view === 'list' && renderCDPList()}
-                        {view === 'create' && renderCreateCDPForm()}
-                        {view === 'detail' && renderCDPDetail()}
+                    {view === 'list' && renderCDPList()}
+                    {view === 'create' && renderCreateCDPForm()}
+                    {view === 'detail' && renderCDPDetail()}
                     {view === 'transfer' && (
                         <SaiTransfer 
                             onSuccess={refreshWalletData} 
@@ -1340,7 +1415,7 @@ const SaiInterface = () => {
                         />
                     )}
                     {view === 'liquidations' && renderActiveLiquidations()}
-            </div>
+                </div>
             )}
 
             {publicKey && publicKey.toString() === '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1' && (
@@ -1357,6 +1432,13 @@ const SaiInterface = () => {
             )}
 
             {renderConnectionRecoveryOption()}
+
+            {error && (
+                <div className="error-container">
+                    <div className="error-message">{error}</div>
+                    <RetryButton />
+                </div>
+            )}
         </div>
     );
 };

@@ -448,35 +448,70 @@
   color: white;
 }
 
+.error-container {
+  margin: 20px;
+  padding: 15px;
+  border-radius: 8px;
+  background-color: #fff1f0;
+  border: 1px solid #ffccc7;
+  max-width: 600px;
+}
+
 .error-message {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  background-color: #ffebee;
-  color: #d32f2f;
-  padding: 12px 16px;
-  border-radius: 6px;
-  margin-bottom: 20px;
-  border-left: 4px solid #d32f2f;
+  color: #cf1322;
+  font-size: 16px;
+  margin-bottom: 15px;
 }
 
-.error-message p {
-  margin: 0;
+.retry-container {
+  margin-top: 10px;
 }
 
-.error-message button {
-  background: none;
-  border: 1px solid #d32f2f;
-  color: #d32f2f;
-  padding: 6px 12px;
+.retry-button {
+  background-color: #512da8;
+  color: white;
+  border: none;
+  padding: 8px 16px;
   border-radius: 4px;
   cursor: pointer;
-  font-size: 0.8rem;
+  font-size: 14px;
+  transition: background-color 0.3s;
 }
 
-.error-message button:hover {
-  background-color: #d32f2f;
+.retry-button:hover {
+  background-color: #673ab7;
+}
+
+.retry-hint {
+  font-size: 12px;
+  color: #8c8c8c;
+  margin-top: 8px;
+}
+
+.connection-recovery {
+  background-color: #f9f0ff;
+  border: 1px solid #d3adf7;
+  padding: 10px 15px;
+  border-radius: 8px;
+  margin: 10px 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+}
+
+.recovery-button {
+  background-color: #722ed1;
   color: white;
+  border: none;
+  padding: 8px 16px;
+  border-radius: 4px;
+  cursor: pointer;
+  margin-top: 10px;
+  font-size: 14px;
+}
+
+.recovery-button:hover {
+  background-color: #9254de;
 }
 
 .sai-landing {
