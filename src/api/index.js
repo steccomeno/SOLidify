@@ -26,14 +26,14 @@ export const isAPIInitialized = () => {
     return solanaAPI !== null;
 };
 
-export const initializeAPI = (wallet) => {
+export const initializeAPI = async (wallet) => {
     try {
         console.log('API INIT - STEP 1: Starting initialization with wallet details:', {
             hasWallet: !!wallet,
             connected: wallet?.connected,
             hasPublicKey: !!wallet?.publicKey,
             publicKeyStr: wallet?.publicKey?.toString(),
-            hasSignTransaction: !!wallet?.signTransaction
+            hasSignTransaction: typeof wallet?.signTransaction === 'function'
         });
 
         if (!wallet) {
@@ -106,6 +106,10 @@ export const initializeAPI = (wallet) => {
 
         console.log('API INIT - STEP 4: Creating SolanaAPI instance');
         solanaAPI = new SolanaAPI(connection, wallet);
+        
+        // Make the API available globally for debugging
+        window.solanaAPI = solanaAPI;
+        
         console.log('API INIT - STEP 5: SolanaAPI instance created successfully');
         
         // Test the connection by getting balances

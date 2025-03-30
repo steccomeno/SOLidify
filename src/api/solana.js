@@ -677,6 +677,35 @@ export class SolanaAPI {
         }
     }
 
+    async addSAIToPhantomWallet() {
+        try {
+            if (!window.solana || !window.solana.isPhantom) {
+                console.log('Phantom wallet not detected');
+                return { success: false, error: 'Phantom wallet not detected' };
+            }
+            
+            console.log('Attempting to add SAI token to Phantom wallet...');
+            
+            // Call Phantom's method to add a token
+            await window.solana.request({
+                method: "wallet_watchAsset",
+                params: {
+                    type: "SPL", // Solana's token type
+                    options: {
+                        address: this.saiMint, // The token address
+                        decimals: SAI_DECIMALS
+                    }
+                }
+            });
+            
+            console.log('SAI token added to Phantom wallet successfully');
+            return { success: true };
+        } catch (error) {
+            console.error('Error adding SAI token to Phantom wallet:', error);
+            return { success: false, error: error.message };
+        }
+    }
+
     async getTokenBalances() {
         try {
             if (!this.wallet || !this.wallet.publicKey) {
@@ -731,6 +760,16 @@ export class SolanaAPI {
                     if (error.name === 'TokenAccountNotFoundError') {
                         console.log('SAI token account does not exist yet - this is normal for new users');
                         
+                        // Try adding the token to Phantom wallet first
+                        if (!window._saiTokenAddSuggested) {
+                            window._saiTokenAddSuggested = true;
+                            
+                            // Try to suggest adding the token to the wallet (show once per session)
+                            if (window.confirm("Would you like to add the SAI token to your Phantom wallet? This can help with token account creation.")) {
+                                await this.addSAIToPhantomWallet();
+                            }
+                        }
+                        
                         // Only try to create the token account if we haven't attempted it in this session
                         if (!window._saiTokenAccountAttempted) {
                             window._saiTokenAccountAttempted = true;
@@ -778,6 +817,18 @@ export class SolanaAPI {
                                         console.log('User declined to create SAI token account:', phantomError.message);
                                         // Store this error to avoid making multiple attempts
                                         window._saiTokenAccountError = phantomError.message;
+                                        
+                                        // If we get an unexpected error, suggest adding the token manually
+                                        if (phantomError.message.includes('Unexpected error') && !window._saiManualAddSuggested) {
+                                            window._saiManualAddSuggested = true;
+                                            const suggestion = 'Try adding the SAI token to your Phantom wallet manually:\n' +
+                                                '1. Open Phantom\n' +
+                                                '2. Click "+ Add token"\n' +
+                                                `3. Paste the token address: ${this.saiMint}\n` +
+                                                '4. Click "Add"';
+                                            console.log(suggestion);
+                                            alert(suggestion);
+                                        }
                                     }
                                 }
                             } catch (createError) {

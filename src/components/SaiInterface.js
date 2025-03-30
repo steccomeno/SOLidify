@@ -1172,6 +1172,28 @@ const SaiInterface = () => {
                                     <span className="balance-label">SAI Balance:</span>
                                     <span className="balance-value">{walletBalance.sai.toFixed(2)} SAI</span>
                                 </div>
+                                <button 
+                                    className="add-token-button"
+                                    onClick={() => {
+                                        if (window.solanaAPI) {
+                                            window.solanaAPI.addSAIToPhantomWallet()
+                                                .then(result => {
+                                                    if (result.success) {
+                                                        alert('SAI token added successfully to Phantom wallet!');
+                                                    } else {
+                                                        alert('Error adding SAI token: ' + result.error);
+                                                    }
+                                                })
+                                                .catch(err => {
+                                                    alert('Failed to add SAI token: ' + err.message);
+                                                });
+                                        } else {
+                                            alert('Please connect your wallet first');
+                                        }
+                                    }}
+                                >
+                                    Add SAI to Phantom
+                                </button>
                             </div>
                             <div className="wallet-address">
                                 <span>{publicKey.toString().substring(0, 4)}...{publicKey.toString().substring(publicKey.toString().length - 4)}</span>
