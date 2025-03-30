@@ -710,4 +710,66 @@ export const mintTestSAI = async (amount) => {
             error: error.message
         };
     }
+};
+
+// Add getTokenBalances function before the exports
+export const getTokenBalances = async () => {
+    if (!solanaAPI) {
+        console.warn('getTokenBalances: Solana API not initialized');
+        return {
+            success: false,
+            error: 'Wallet not connected'
+        };
+    }
+    
+    try {
+        return await solanaAPI.getTokenBalances();
+    } catch (error) {
+        console.error('Error getting token balances:', error);
+        return {
+            success: false,
+            error: error.message
+        };
+    }
+};
+
+// Keep only one export list
+// Add getTokenBalances to the list of exported functions
+export {
+    initialize,
+    getConnection,
+    connectWallet,
+    getWalletBalance,
+    getUserCDPs,
+    getCDPInfo,
+    createCDP,
+    closeCDP,
+    drawSai,
+    repaySai,
+    addCollateral,
+    // Governance
+    getGovernanceData,
+    getUserSLDBalance,
+    getProposals,
+    getProposalInfo,
+    createProposal,
+    castVote,
+    executeProposal,
+    getProposalDetails,
+    getAllProposals,
+    // Liquidations
+    checkVaultLiquidationRisk,
+    getAllActiveLiquidations,
+    bidOnLiquidationAuction,
+    getLiquidationHistoryForUser,
+    // Price Oracle
+    getCollateralPrice,
+    // SAI Transfer
+    transferSai,
+    // Admin functions
+    mintTestSAI,
+    // Utils
+    isAPIInitialized,
+    initializeAPI
+    // getTokenBalances is already exported as a named export above
 }; 

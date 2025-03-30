@@ -67,7 +67,6 @@ const SaiInterface = () => {
     // Add missing variables and states
     const [mintAmount, setMintAmount] = useState(100);
     const [mintingInProgress, setMintingInProgress] = useState(false);
-    const [selectedCdp, setSelectedCdp] = useState(null);
     const [connectionError, setConnectionError] = useState(null);
 
     useEffect(() => {
@@ -142,16 +141,16 @@ const SaiInterface = () => {
         return false;
     };
 
-    const initializeWalletAndLoadData = async () => {
+        const initializeWalletAndLoadData = async () => {
         console.log("SaiInterface - Initializing wallet and loading data");
         setWalletStatus('initializing');
         
         if (connected && wallet) {
-            try {
+                try {
                 console.log('SaiInterface - Wallet connected:', {
-                    connected,
-                    hasWallet: !!wallet,
-                    hasPublicKey: !!publicKey,
+                        connected,
+                        hasWallet: !!wallet,
+                        hasPublicKey: !!publicKey,
                     publicKeyStr: publicKey?.toString()
                 });
 
@@ -228,11 +227,11 @@ const SaiInterface = () => {
                     }
                 }
 
-                // Clear any existing errors
-                setError(null);
+                    // Clear any existing errors
+                    setError(null);
 
-                // Initialize API if not already initialized
-                if (!isAPIInitialized()) {
+                    // Initialize API if not already initialized
+                    if (!isAPIInitialized()) {
                     console.log('SaiInterface - API not initialized, initializing now...');
                     try {
                         await initializeAPI(wallet);
@@ -253,9 +252,9 @@ const SaiInterface = () => {
                 } else {
                     console.log('SaiInterface - API already initialized');
                     setWalletStatus('connected');
-                }
+                    }
 
-                // Load data only after API is initialized
+                    // Load data only after API is initialized
                 console.log('SaiInterface - Loading user data...');
                 try {
                     await Promise.all([
@@ -270,9 +269,9 @@ const SaiInterface = () => {
                     setError(`Failed to load user data: ${dataError.message}`);
                     return false;
                 }
-            } catch (error) {
+                } catch (error) {
                 console.error('SaiInterface - Failed to initialize:', error);
-                setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
+                    setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
                 setWalletStatus('error');
                 return false;
             }
@@ -305,7 +304,7 @@ const SaiInterface = () => {
     }, [cdpDetails]);
 
     const loadUserCDPs = async () => {
-        setLoading(true);
+            setLoading(true);
         try {
             const result = await getUserCDPs();
             
@@ -359,23 +358,23 @@ const SaiInterface = () => {
 
     const loadWalletData = async () => {
         try {
-            setLoading(true);
-            const balances = await getWalletBalance();
-            setWalletBalance(balances);
-            setLoading(false);
+            // Load token balances
+            await loadTokenBalances();
+            
+            // Any other wallet data that needs to be loaded can be added here
+            // For example, loadPermissions(), loadWalletActivity(), etc.
+            
+            // Clear any connection errors
+            setConnectionError(null);
         } catch (error) {
             console.error('Error loading wallet data:', error);
-            
-            // Check if this is a connection issue
-            if (error.message?.includes('429') || 
-                error.message?.includes('rate limit') || 
-                error.message?.includes('Connection') ||
-                error.message?.includes('network')) {
-                
-                await recoverFromConnectionError();
-            } else {
-                setLoading(false);
-                setError(`Error loading wallet data: ${error.message}`);
+            // Only set connection error if it's a network issue
+            if (
+                error.message.includes('network') || 
+                error.message.includes('connection') || 
+                error.message.includes('timeout')
+            ) {
+                setConnectionError(error.message);
             }
         }
     };
@@ -536,7 +535,7 @@ const SaiInterface = () => {
             while (retryCount < 2) {
                 try {
                     result = await createCDP(collateral, sai);
-                    console.log('CDP creation result:', result);
+            console.log('CDP creation result:', result);
                     break; // If successful, exit the loop
                 } catch (error) {
                     console.error(`CDP creation attempt ${retryCount+1} failed:`, error);
@@ -1207,8 +1206,9 @@ const SaiInterface = () => {
     };
 
     // Add a function to refresh wallet data after transfers
-    const refreshWalletData = async () => {
-        await loadWalletData();
+    const refreshWalletData = () => {
+        loadWalletData();
+        loadUserCDPs();
     };
 
     // Add this function inside the component to handle connection recovery
@@ -1238,21 +1238,25 @@ const SaiInterface = () => {
         }
     };
 
-    // Also add a button to manually trigger connection recovery
+    // Add renderConnectionRecoveryOption function
     const renderConnectionRecoveryOption = () => {
-        if (error && (error.includes('429') || error.includes('Connection') || error.includes('network'))) {
-            return (
-                <div className="connection-recovery">
-                    <p>Connection issues detected.</p>
+        return (
+            <div className="connection-recovery">
+                <p>
+                    <strong>Connection Issue Detected:</strong> {connectionError}
+                </p>
+                <p className="recovery-hint">
+                    This could be due to Solana network congestion or rate limiting. 
+                    You can try to reconnect with a different RPC provider.
+                </p>
                     <button 
-                        onClick={recoverFromConnectionError}
-                        className="recovery-button">
-                        Try Reconnecting
+                    className="recovery-button" 
+                    onClick={initializeWallet}
+                    >
+                    Reconnect Wallet
                     </button>
-                </div>
-            );
-        }
-        return null;
+            </div>
+        );
     };
 
     // Add improved error handling for program initialization failures
@@ -1426,7 +1430,7 @@ const SaiInterface = () => {
         
         return (
             <div className="retry-container">
-                <button 
+                    <button 
                     className="retry-button"
                     onClick={() => {
                         setError(null);
@@ -1435,11 +1439,11 @@ const SaiInterface = () => {
                     }}
                 >
                     Retry Connection
-                </button>
+                    </button>
                 <p className="retry-hint">
                     If the issue persists, try switching to a different network in your wallet settings.
                 </p>
-            </div>
+                </div>
         );
     };
 
@@ -1486,7 +1490,7 @@ const SaiInterface = () => {
         setError(null);
     };
 
-    // Add loadTokenBalances function
+    // Update loadTokenBalances to also update walletBalance for backward compatibility
     const loadTokenBalances = async () => {
         try {
             const result = await getTokenBalances();
@@ -1494,9 +1498,15 @@ const SaiInterface = () => {
             // Check if the result has success flag and data structure
             if (result && result.success && result.data) {
                 setBalances(result.data);
+                // Also update walletBalance for backward compatibility
+                setWalletBalance({
+                    sol: result.data.sol,
+                    sai: result.data.sai
+                });
             } else if (result && typeof result.sol !== 'undefined') {
                 // Handle old format for backward compatibility
                 setBalances(result);
+                setWalletBalance(result);
             } else if (result && !result.success) {
                 // Handle error response
                 setError({
@@ -1505,10 +1515,12 @@ const SaiInterface = () => {
                 });
                 // Still set default balances
                 setBalances({ sol: 0, sai: 0, sld: 0 });
+                setWalletBalance({ sol: 0, sai: 0 });
             } else {
                 // Fallback for unexpected response format
                 console.error('Unexpected response from getTokenBalances:', result);
                 setBalances({ sol: 0, sai: 0, sld: 0 });
+                setWalletBalance({ sol: 0, sai: 0 });
             }
         } catch (error) {
             console.error('Error loading token balances:', error);
@@ -1518,6 +1530,7 @@ const SaiInterface = () => {
             });
             // Still set default balances
             setBalances({ sol: 0, sai: 0, sld: 0 });
+            setWalletBalance({ sol: 0, sai: 0 });
         }
     };
 
@@ -1571,8 +1584,8 @@ const SaiInterface = () => {
                         <h2>Your CDPs</h2>
                         {loading ? (
                             <p>Loading CDPs...</p>
-                        ) : (
-                            <>
+                ) : (
+                    <>
                                 {cdps.length === 0 ? (
                                     <p>You don't have any CDPs yet.</p>
                                 ) : (
@@ -1580,9 +1593,9 @@ const SaiInterface = () => {
                                 )}
                                 
                                 {renderCreateCDPForm()}
-                            </>
-                        )}
-                    </div>
+                    </>
+                )}
+            </div>
                     
                     {selectedCDP && renderCDPDetail()}
                     
