@@ -6,6 +6,41 @@ import saiIDL from '../idl/sai.json';
 import tokenInfo from '../scripts/sai_token_info.json';
 import { Keypair } from '@solana/web3.js';
 
+// Rate limiting and retry utilities
+const RETRY_DELAY = 1000; // 1 second
+const MAX_RETRIES = 3;
+const BACKOFF_FACTOR = 1.5;
+
+// Simple exponential backoff function
+async function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+// Retry function with exponential backoff
+async function retryWithBackoff(fn, retriesLeft = MAX_RETRIES, delay = RETRY_DELAY) {
+  try {
+    return await fn();
+  } catch (error) {
+    // If error is rate limit (429), wait and retry
+    if (error.message?.includes('429') || 
+        error.message?.includes('rate limit') || 
+        error.message?.includes('Connection rate limits exceeded')) {
+      console.log(`Rate limit hit, retrying in ${delay}ms. Retries left: ${retriesLeft}`);
+      
+      if (retriesLeft === 0) {
+        console.error('Max retries reached, giving up');
+        throw error;
+      }
+      
+      await wait(delay);
+      return retryWithBackoff(fn, retriesLeft - 1, delay * BACKOFF_FACTOR);
+    }
+    
+    // For other errors, just throw
+    throw error;
+  }
+}
+
 // Constants
 const PROGRAM_ID = new PublicKey('GY7XKMrF4VMLBou37oBieKzRM6YZJHnjnic5sorE4rRU');
 const SOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
@@ -360,8 +395,11 @@ export class SolanaAPI {
                 };
             }
             
-            // Setup transaction
-            const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
+            // Setup transaction with retry for blockhash
+            const { blockhash, lastValidBlockHeight } = await retryWithBackoff(async () => {
+                return await this.connection.getLatestBlockhash();
+            });
+            
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = this.wallet.publicKey;
             
@@ -372,13 +410,19 @@ export class SolanaAPI {
             console.log('Transaction prepared, sending...');
             
             try {
+                // Add delay to avoid rate limits
+                await wait(500);
+                
                 const signature = await this.wallet.sendTransaction(transaction, this.connection);
                 console.log('Transaction sent with signature:', signature);
                 
-                const confirmation = await this.connection.confirmTransaction({
-                    blockhash,
-                    lastValidBlockHeight,
-                    signature
+                // Confirm transaction with retry
+                const confirmation = await retryWithBackoff(async () => {
+                    return await this.connection.confirmTransaction({
+                        blockhash,
+                        lastValidBlockHeight,
+                        signature
+                    });
                 });
                 
                 console.log('CDP created successfully!', confirmation);
@@ -390,6 +434,16 @@ export class SolanaAPI {
                 };
             } catch (error) {
                 console.error('Transaction error:', error);
+                
+                // Check for rate limiting
+                if (error.message?.includes('429') || 
+                    error.message?.includes('rate limit') || 
+                    error.message?.includes('Connection rate limits exceeded')) {
+                    return {
+                        success: false,
+                        error: 'Solana RPC rate limit exceeded. Please try again in a moment.'
+                    };
+                }
                 
                 // Check for common error messages and provide better explanations
                 if (error.message?.includes('Insufficient funds')) {
@@ -740,13 +794,15 @@ export class SolanaAPI {
                 return { sol: 0, sai: 0 };
             }
 
-            // Get SOL balance
+            // Get SOL balance using retry logic
             let solBalance = 0;
             try {
-                solBalance = await this.connection.getBalance(this.wallet.publicKey);
+                solBalance = await retryWithBackoff(async () => {
+                    return await this.connection.getBalance(this.wallet.publicKey);
+                });
                 console.log(`Raw SOL balance: ${solBalance} lamports, ${solBalance / LAMPORTS_PER_SOL} SOL`);
             } catch (err) {
-                console.error('Error getting SOL balance:', err);
+                console.error('Error getting SOL balance after retries:', err);
             }
             
             // Get SAI token account or create it if it doesn't exist
@@ -766,13 +822,18 @@ export class SolanaAPI {
                 
                 console.log(`SAI token account address: ${tokenAccount.toString()}`);
                 
-                // Check if the token account exists
+                // Check if the token account exists - with retry
                 try {
-                    const accountInfo = await this.connection.getAccountInfo(tokenAccount);
+                    const accountInfo = await retryWithBackoff(async () => {
+                        return await this.connection.getAccountInfo(tokenAccount);
+                    });
                     
                     if (accountInfo) {
                         console.log('SAI token account exists, getting balance');
-                        const account = await getAccount(this.connection, tokenAccount);
+                        // Use retry for getting account info as well
+                        const account = await retryWithBackoff(async () => {
+                            return await getAccount(this.connection, tokenAccount);
+                        });
                         saiBalance = Number(account.amount) / Math.pow(10, SAI_DECIMALS);
                         console.log(`Found SAI token account with ${saiBalance} SAI`);
                     } else {
@@ -1025,8 +1086,11 @@ export class SolanaAPI {
             // Create and setup transaction
             const transaction = new Transaction().add(createAccountInstruction);
             
-            // Get recent blockhash
-            const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
+            // Get recent blockhash with retry
+            const { blockhash, lastValidBlockHeight } = await retryWithBackoff(async () => {
+                return await this.connection.getLatestBlockhash();
+            });
+            
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = this.wallet.publicKey;
             
@@ -1038,11 +1102,13 @@ export class SolanaAPI {
                 const signature = await this.wallet.sendTransaction(transaction, this.connection);
                 console.log('Token account creation transaction sent:', signature);
                 
-                // Confirm transaction
-                const confirmationResult = await this.connection.confirmTransaction({
-                    blockhash,
-                    lastValidBlockHeight,
-                    signature
+                // Confirm transaction with retry
+                const confirmationResult = await retryWithBackoff(async () => {
+                    return await this.connection.confirmTransaction({
+                        blockhash,
+                        lastValidBlockHeight,
+                        signature
+                    });
                 });
                 
                 console.log('Token account created successfully:', confirmationResult);
@@ -1054,10 +1120,13 @@ export class SolanaAPI {
                         console.log('Falling back to direct Phantom API...');
                         const signature = await window.solana.signAndSendTransaction(transaction);
                         
-                        await this.connection.confirmTransaction({
-                            blockhash,
-                            lastValidBlockHeight,
-                            signature: signature.signature
+                        // Confirm with retry
+                        await retryWithBackoff(async () => {
+                            return await this.connection.confirmTransaction({
+                                blockhash,
+                                lastValidBlockHeight,
+                                signature: signature.signature
+                            });
                         });
                         
                         console.log('Token account created successfully with direct API');

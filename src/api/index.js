@@ -1,7 +1,69 @@
 import { SolanaAPI } from './solana';
 import { connection } from '../utils/walletUtils';
+import { Connection } from '@solana/web3.js';
 
 let solanaAPI = null;
+
+// Add this section for multiple RPC endpoints with fallback
+const RPC_ENDPOINTS = {
+  devnet: [
+    "https://api.devnet.solana.com",
+    "https://devnet.genesysgo.net",
+    "https://devnet.helius-rpc.com/?api-key=8475c5f5-e94b-4c4c-9997-05a3d531e786", // Example only, get your own API key
+    "https://solana-devnet-rpc.publicnode.com",
+  ],
+  mainnet: [
+    "https://api.mainnet-beta.solana.com",
+    "https://solana-mainnet-rpc.publicnode.com",
+    "https://rpc.ankr.com/solana",
+  ]
+};
+
+// Function to create a connection with fallback
+async function createConnectionWithFallback(network = 'devnet', retryCount = 0) {
+  const endpoints = RPC_ENDPOINTS[network] || RPC_ENDPOINTS.devnet;
+  
+  // Start with the default endpoint or cycle through available ones
+  const endpoint = endpoints[retryCount % endpoints.length];
+  
+  console.log(`Creating connection to ${endpoint} (attempt ${retryCount + 1})`);
+  
+  try {
+    // Create a connection with custom confirmation params
+    const connection = new Connection(endpoint, {
+      commitment: 'confirmed',
+      confirmTransactionInitialTimeout: 60000, // 60 seconds
+      disableRetryOnRateLimit: false
+    });
+    
+    // Test the connection
+    await connection.getVersion();
+    console.log(`Successfully connected to ${endpoint}`);
+    return connection;
+  } catch (error) {
+    console.error(`Failed to connect to ${endpoint}:`, error);
+    
+    if (retryCount < endpoints.length * 2) {
+      console.log(`Falling back to next RPC endpoint...`);
+      // Use exponential backoff
+      await new Promise(resolve => setTimeout(resolve, Math.min(1000 * (retryCount + 1), 10000)));
+      return createConnectionWithFallback(network, retryCount + 1);
+    } else {
+      console.error('All RPC endpoints failed');
+      throw new Error('Unable to connect to Solana network: All RPC endpoints failed');
+    }
+  }
+}
+
+// Export getConnection function that uses the fallback mechanism
+export const getConnection = async (network = 'devnet') => {
+  try {
+    return await createConnectionWithFallback(network);
+  } catch (error) {
+    console.error('Failed to establish connection:', error);
+    throw error;
+  }
+};
 
 // Mock wallet connection function
 export const connectWallet = async () => {
@@ -83,12 +145,11 @@ export const initializeAPI = async (wallet) => {
 
         console.log('API INIT - STEP 2: Wallet validated, attempting to create SolanaAPI instance');
         
-        // Check if connection is valid
-        console.log('API INIT - Connection details:', {
-            endpoint: connection.rpcEndpoint,
-            commitment: connection.commitment
-        });
-
+        // Use getConnection instead of directly creating a Connection
+        const connection = await getConnection('devnet');
+        
+        console.log('Connection established with endpoint:', connection.rpcEndpoint);
+        
         // Load token info if available
         try {
             console.log('API INIT - STEP 3: Attempting to load config');
