@@ -16,7 +16,8 @@ import {
     checkVaultLiquidationRisk,
     getAllActiveLiquidations,
     initializeAPI,
-    isAPIInitialized
+    isAPIInitialized,
+    mintTestSAI
 } from '../api/index';
 import LiquidationRiskIndicator from './LiquidationRiskIndicator';
 import SaiTransfer from './SaiTransfer';
@@ -331,6 +332,25 @@ const SaiInterface = () => {
         } catch (error) {
             console.error('Error closing CDP:', error);
             alert(error.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const handleMintTestSAI = async () => {
+        try {
+            setLoading(true);
+            const result = await mintTestSAI(10); // Mint 10 SAI
+            if (result.success) {
+                alert('Successfully minted test SAI tokens');
+                // Refresh balances
+                await loadWalletData();
+            } else {
+                alert(`Failed to mint: ${result.error}`);
+            }
+        } catch (error) {
+            console.error('Error minting SAI:', error);
+            alert(`Error: ${error.message}`);
         } finally {
             setLoading(false);
         }
@@ -917,6 +937,19 @@ const SaiInterface = () => {
                         />
                     )}
                     {view === 'liquidations' && renderActiveLiquidations()}
+                </div>
+            )}
+
+            {publicKey && publicKey.toString() === '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1' && (
+                <div className="admin-section">
+                    <h3>Admin Controls</h3>
+                    <button 
+                        className="admin-button"
+                        onClick={handleMintTestSAI}
+                        disabled={loading}
+                    >
+                        {loading ? 'Processing...' : 'Mint Test SAI (Admin Only)'}
+                    </button>
                 </div>
             )}
         </div>

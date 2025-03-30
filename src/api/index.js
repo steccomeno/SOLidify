@@ -48,8 +48,32 @@ export const initializeAPI = (wallet) => {
             throw new Error('Wallet signTransaction function is not available');
         }
 
+        // Load token info if available
+        try {
+            fetch('/api/config')
+                .then(response => response.json())
+                .then(data => {
+                    console.log('Config loaded:', data);
+                })
+                .catch(error => {
+                    console.error('Could not load config:', error);
+                });
+        } catch (error) {
+            console.warn('Config loading not available:', error);
+        }
+
         solanaAPI = new SolanaAPI(connection, wallet);
         console.log('SolanaAPI instance created successfully');
+        
+        // Test the connection by getting balances
+        solanaAPI.getTokenBalances()
+            .then(balances => {
+                console.log('Initial balances fetched:', balances);
+            })
+            .catch(error => {
+                console.error('Error fetching initial balances:', error);
+            });
+        
         return true;
     } catch (error) {
         console.error('Failed to initialize API:', error);
@@ -258,6 +282,34 @@ export const transferSai = async (recipientAddress, amount) => {
         return {
             success: false,
             error: error.message || 'Failed to transfer SAI tokens'
+        };
+    }
+};
+
+// Function for admin to mint test SAI tokens
+export const mintTestSAI = async (amount) => {
+    if (!solanaAPI) {
+        throw new Error('API not initialized. Please connect your wallet first.');
+    }
+    
+    try {
+        // Check if the caller is the admin
+        if (solanaAPI.wallet.publicKey.toString() !== '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1') {
+            return {
+                success: false,
+                error: 'Only the admin can mint test tokens'
+            };
+        }
+        
+        console.log(`Admin attempting to mint ${amount} SAI tokens for testing...`);
+        
+        // Call the mintSai function in the solanaAPI
+        return await solanaAPI.mintTestSAI(amount);
+    } catch (error) {
+        console.error('Error minting test SAI:', error);
+        return {
+            success: false,
+            error: error.message
         };
     }
 }; 
