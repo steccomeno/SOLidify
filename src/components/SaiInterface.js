@@ -393,6 +393,7 @@ const SaiInterface = () => {
             return;
         }
 
+        // Parse values and check if they're valid
         const collateral = parseFloat(collateralAmount);
         const sai = parseFloat(saiAmount);
 
@@ -405,26 +406,86 @@ const SaiInterface = () => {
             setError('Amounts must be greater than 0');
             return;
         }
+        
+        // Check that the user has enough SOL
+        if (collateral > walletBalance.sol) {
+            setError(`You don't have enough SOL. Your balance: ${walletBalance.sol} SOL`);
+            return;
+        }
+        
+        // Check reasonable ratio (minimum ~150% collateralization)
+        const collateralValueInUSD = collateral * 20; // Assuming 1 SOL = $20 USD
+        if (collateralValueInUSD < sai * 1.5) {
+            setError('Collateralization ratio too low. Add more collateral or reduce SAI amount.');
+            return;
+        }
 
         try {
             setIsCreating(true);
             setError(null);
             
             console.log('Creating CDP with:', { collateral, sai });
-            const result = await createCDP(collateral, sai);
-            console.log('CDP creation result:', result);
+            
+            // Add a retry mechanism
+            let retryCount = 0;
+            let result = null;
+            
+            while (retryCount < 2) {
+                try {
+                    result = await createCDP(collateral, sai);
+                    console.log('CDP creation result:', result);
+                    break; // If successful, exit the loop
+                } catch (error) {
+                    console.error(`CDP creation attempt ${retryCount+1} failed:`, error);
+                    
+                    if (error.message.includes('rejected') && retryCount < 1) {
+                        // User may have rejected, give them another chance
+                        console.log('Transaction was rejected, retrying once...');
+                        retryCount++;
+                        await new Promise(resolve => setTimeout(resolve, 1000)); // Wait a second
+                    } else {
+                        // Other error or we've already retried
+                        throw error;
+                    }
+                }
+            }
 
-            if (result.success) {
+            if (result && result.success) {
                 setCollateralAmount('');
                 setSaiAmount('');
                 setView('list');
                 await loadUserCDPs();
+                await loadWalletData(); // Refresh balances
+            } else if (result) {
+                // Handle known error types with user-friendly messages
+                let errorMessage = result.error;
+                
+                if (result.error.includes('rejected the request')) {
+                    errorMessage = 'Transaction cancelled. You rejected the transaction in your wallet.';
+                } else if (result.error.includes('Unexpected error')) {
+                    errorMessage = 'Transaction failed. Make sure your Phantom wallet is connected and try again.';
+                } else if (result.error.includes('insufficient funds')) {
+                    errorMessage = 'Insufficient funds for transaction. Make sure you have enough SOL to cover fees.';
+                }
+                
+                setError(errorMessage);
             } else {
-                setError(result.error || 'Failed to create CDP');
+                setError('Failed to create CDP due to an unknown error');
             }
         } catch (error) {
             console.error('Error creating CDP:', error);
-            setError(error.message || 'Failed to create CDP');
+            let errorMessage = error.message;
+            
+            // Make errors more user friendly
+            if (error.message.includes('rejected')) {
+                errorMessage = 'Transaction was rejected in your wallet.';
+            } else if (error.message.includes('blockhash')) {
+                errorMessage = 'Network error. Please try again in a moment.';
+            } else if (error.message.includes('timed out')) {
+                errorMessage = 'Transaction timed out. The network may be congested, please try again.';
+            }
+            
+            setError(errorMessage);
         } finally {
             setIsCreating(false);
         }

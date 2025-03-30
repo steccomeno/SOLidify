@@ -118,11 +118,51 @@ export class SolanaAPI {
                     // Ensure transaction has a recent blockhash
                     if (!transaction.recentBlockhash) {
                         console.log('Transaction missing recentBlockhash, adding it now');
-                        const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+                        const { blockhash } = await connection.getLatestBlockhash('confirmed');
                         transaction.recentBlockhash = blockhash;
                     }
-                    
-                    return window.solana.signAndSendTransaction(transaction);
+
+                    // Phantom's signAndSendTransaction expects a base64 encoded serialized transaction
+                    try {
+                        // Log the transaction details before serializing
+                        console.log('Transaction before serializing:', {
+                            feePayer: transaction.feePayer?.toString(),
+                            recentBlockhash: transaction.recentBlockhash,
+                            instructions: transaction.instructions.length
+                        });
+                        
+                        // Use direct window.solana method with proper Transaction format
+                        const response = await window.solana.signAndSendTransaction(transaction);
+                        console.log('Transaction response:', response);
+                        await connection.confirmTransaction(response.signature, 'confirmed');
+                        return response.signature;
+                    } catch (error) {
+                        console.error('Error in signAndSendTransaction:', error);
+                        
+                        // Try fallback approach for Phantom
+                        if (error.message.includes('Unexpected') || error.message.includes('rejected')) {
+                            console.log('Trying fallback approach with separate sign and send steps');
+                            try {
+                                // Sign the transaction directly with the wallet
+                                const signedTx = await wallet.signTransaction(transaction);
+                                console.log('Transaction signed successfully');
+                                
+                                // Send the signed transaction
+                                const serializedTx = signedTx.serialize();
+                                const signature = await connection.sendRawTransaction(
+                                    serializedTx,
+                                    options
+                                );
+                                console.log('Transaction sent with signature:', signature);
+                                await connection.confirmTransaction(signature, 'confirmed');
+                                return signature;
+                            } catch (fallbackError) {
+                                console.error('Fallback approach failed:', fallbackError);
+                                throw fallbackError;
+                            }
+                        }
+                        throw error;
+                    }
                 };
             } else if (window.solana && typeof window.solana.sendTransaction === 'function') {
                 console.log('Patching wallet.sendTransaction with window.solana.sendTransaction');
@@ -202,6 +242,14 @@ export class SolanaAPI {
                 throw new Error('Wallet not connected');
             }
 
+            console.log(`Creating CDP with ${collateralAmount} SOL collateral for ${saiAmount} SAI`);
+
+            // Convert to lamports/raw amounts (assuming 9 decimals for SOL and 6 for SAI)
+            const collateralLamports = Math.floor(collateralAmount * 1e9); // Convert SOL to lamports
+            const saiRawAmount = Math.floor(saiAmount * 1e6); // Convert SAI to raw units
+
+            console.log(`Using ${collateralLamports} lamports and ${saiRawAmount} raw SAI units`);
+
             const [cdp] = await PublicKey.findProgramAddress(
                 [Buffer.from('cdp'), this.wallet.publicKey.toBuffer()],
                 PROGRAM_ID
@@ -222,55 +270,72 @@ export class SolanaAPI {
                 PROGRAM_ID
             );
 
+            console.log('Derived addresses:', {
+                cdp: cdp.toString(),
+                vault: vault.toString(),
+                mintAuthority: mintAuthority.toString()
+            });
+
             const ownerCollateral = await getAssociatedTokenAddress(
                 SOL_MINT,
                 this.wallet.publicKey
             );
 
             const ownerSai = await getAssociatedTokenAddress(
-                this.program.programId,
+                SAI_MINT,
                 this.wallet.publicKey
             );
 
+            console.log('Token accounts:', {
+                ownerCollateral: ownerCollateral.toString(),
+                ownerSai: ownerSai.toString()
+            });
+
+            // Create new Transaction
             const transaction = new Transaction();
 
             // Create associated token account for SAI if it doesn't exist
             try {
                 await getAccount(this.connection, ownerSai);
+                console.log('SAI token account exists, skipping creation');
             } catch (error) {
+                console.log('SAI token account does not exist, adding creation instruction');
                 transaction.add(
                     createAssociatedTokenAccountInstruction(
                         this.wallet.publicKey,
                         ownerSai,
                         this.wallet.publicKey,
-                        this.program.programId
+                        SAI_MINT
                     )
                 );
             }
 
+            console.log('Building initializeCdp instruction');
+            
             // Initialize CDP instruction
-            transaction.add(
-                await this.program.methods
-                    .initializeCdp(
-                        new BN(collateralAmount),
-                        new BN(saiAmount)
-                    )
-                    .accounts({
-                        owner: this.wallet.publicKey,
-                        cdp,
-                        ownerCollateral,
-                        collateralMint: SOL_MINT,
-                        vault,
-                        vaultAuthority,
-                        saiMint: this.program.programId,
-                        ownerSai,
-                        mintAuthority,
-                        tokenProgram: TOKEN_PROGRAM_ID,
-                        systemProgram: SystemProgram.programId,
-                        rent: SYSVAR_RENT_PUBKEY,
-                    })
-                    .instruction()
-            );
+            const initCdpIx = await this.program.methods
+                .initializeCdp(
+                    new BN(collateralLamports),
+                    new BN(saiRawAmount)
+                )
+                .accounts({
+                    owner: this.wallet.publicKey,
+                    cdp,
+                    ownerCollateral,
+                    collateralMint: SOL_MINT,
+                    vault,
+                    vaultAuthority,
+                    saiMint: SAI_MINT,
+                    ownerSai,
+                    mintAuthority,
+                    tokenProgram: TOKEN_PROGRAM_ID,
+                    systemProgram: SystemProgram.programId,
+                    rent: SYSVAR_RENT_PUBKEY,
+                })
+                .instruction();
+                
+            console.log('Adding initializeCdp instruction to transaction');
+            transaction.add(initCdpIx);
 
             // Add a recent blockhash to the transaction
             try {
@@ -293,10 +358,41 @@ export class SolanaAPI {
 
             // Send the transaction
             console.log('Sending transaction to wallet for signing and broadcasting...');
-            const signature = await this.wallet.sendTransaction(transaction, this.connection);
-            console.log('Transaction sent with signature:', signature);
+            let signature;
             
-            await this.connection.confirmTransaction(signature);
+            try {
+                // First try with direct sendTransaction
+                signature = await this.wallet.sendTransaction(transaction, this.connection);
+                console.log('Transaction sent with signature:', signature);
+            } catch (error) {
+                console.error('Error sending transaction:', error);
+                
+                // If that fails with a specific error, try the fallback method
+                if (error.message.includes('Unexpected') || error.message.includes('rejected')) {
+                    console.log('Trying alternative transaction method...');
+                    
+                    try {
+                        // Sign directly with wallet adapter
+                        const signedTx = await this.wallet.signTransaction(transaction);
+                        
+                        // Send the signed transaction
+                        signature = await this.connection.sendRawTransaction(signedTx.serialize(), {
+                            skipPreflight: false,
+                            preflightCommitment: 'confirmed'
+                        });
+                        console.log('Alternative transaction sent with signature:', signature);
+                    } catch (fallbackError) {
+                        console.error('Alternative transaction method failed:', fallbackError);
+                        throw fallbackError;
+                    }
+                } else {
+                    throw error;
+                }
+            }
+            
+            // Confirm the transaction
+            console.log('Confirming transaction...');
+            await this.connection.confirmTransaction(signature, 'confirmed');
             console.log('Transaction confirmed!');
 
             return {
