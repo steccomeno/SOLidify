@@ -1,5 +1,5 @@
 import { Program, AnchorProvider } from '@project-serum/anchor';
-import { PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY } from '@solana/web3.js';
+import { PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, LAMPORTS_PER_SOL } from '@solana/web3.js';
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createTransferInstruction } from '@solana/spl-token';
 import BN from 'bn.js';
 import saiIDL from '../idl/sai.json';
@@ -69,6 +69,7 @@ export class SolanaAPI {
         
         this.connection = connection;
         this.wallet = wallet;
+        this.saiMint = SAI_MINT.toString();
         
         try {
             console.log('Creating AnchorProvider...');
