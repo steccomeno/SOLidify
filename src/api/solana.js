@@ -4,6 +4,7 @@ import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccou
 import BN from 'bn.js';
 import saiIDL from '../idl/sai.json';
 import tokenInfo from '../scripts/sai_token_info.json';
+import { Keypair } from '@solana/web3.js';
 
 // Constants
 const PROGRAM_ID = new PublicKey('GY7XKMrF4VMLBou37oBieKzRM6YZJHnjnic5sorE4rRU');
@@ -264,76 +265,115 @@ export class SolanaAPI {
             
             console.log(`Using ${collateralLamports} lamports and ${saiRaw} raw SAI units`);
             
-            // Derive addresses for program accounts
-            const [cdp, cdpBump] = await PublicKey.findProgramAddress(
-                [Buffer.from("cdp"), this.wallet.publicKey.toBuffer()],
-                this.program.programId
-            );
+            // Create a new CDP account with the program
+            const cdpKeypair = new Keypair();
+            const cdp = cdpKeypair.publicKey;
             
-            const [vault, vaultBump] = await PublicKey.findProgramAddress(
+            console.log('Generated new CDP keypair:', cdp.toString());
+            
+            // Derive the vault and vault authority PDAs
+            const [vault] = await PublicKey.findProgramAddress(
                 [Buffer.from("vault"), cdp.toBuffer()],
                 this.program.programId
             );
             
-            const [mintAuthority, mintAuthorityBump] = await PublicKey.findProgramAddress(
-                [Buffer.from("mint-authority")],
+            const [vaultAuthority] = await PublicKey.findProgramAddress(
+                [Buffer.from("vault_authority"), cdp.toBuffer()],
                 this.program.programId
             );
             
-            console.log(`Derived addresses:`, {
+            // Find the mint authority
+            const [mintAuthority] = await PublicKey.findProgramAddress(
+                [Buffer.from("mint_authority")],
+                this.program.programId
+            );
+            
+            console.log('Derived addresses:', {
                 cdp: cdp.toString(),
                 vault: vault.toString(),
+                vaultAuthority: vaultAuthority.toString(),
                 mintAuthority: mintAuthority.toString()
             });
             
             // Get token accounts
-            const userSai = await getAssociatedTokenAddress(
+            const ownerCollateral = await getAssociatedTokenAddress(
+                new PublicKey(WSOL_MINT),
+                this.wallet.publicKey
+            );
+            
+            const ownerSai = await getAssociatedTokenAddress(
                 new PublicKey(this.saiMint),
                 this.wallet.publicKey
             );
             
-            // Create a token account if it doesn't exist
-            await this.createTokenAccount(userSai);
+            console.log('Token accounts:', {
+                ownerCollateral: ownerCollateral.toString(),
+                ownerSai: ownerSai.toString()
+            });
             
-            // Create a new transaction
+            // Create SAI token account if it doesn't exist
+            try {
+                await this.createTokenAccount(ownerSai);
+            } catch (e) {
+                console.log('Token account creation error (might already exist):', e);
+            }
+            
+            // Create transaction
             const transaction = new Transaction();
             
-            // Calculate BN values for params
-            const collateralBN = new BN(collateralLamports);
-            const saiBN = new BN(saiRaw);
+            // Build instruction based on IDL
+            console.log('Building instruction with EXACT IDL parameters...');
             
-            // Retrieve the contract code to see what parameters it expects
-            const instruction = await this.program.methods
-                .initializeCdp(
-                    collateralBN,
-                    saiBN
-                )
-                .accounts({
-                    user: this.wallet.publicKey,
-                    cdp: cdp,
-                    vault: vault,
-                    mintAuthority: mintAuthority,
-                    saiMint: new PublicKey(this.saiMint),
-                    userSai: userSai,
-                    systemProgram: SystemProgram.programId,
-                    tokenProgram: TOKEN_PROGRAM_ID,
-                    rent: SYSVAR_RENT_PUBKEY,
-                })
-                .instruction();
-            
-            transaction.add(instruction);
+            try {
+                // First, let's prepare the accounts exactly as they appear in the IDL
+                const accounts = {
+                    owner: this.wallet.publicKey,         // owner in IDL
+                    cdp: cdp,                             // cdp in IDL
+                    ownerCollateral: ownerCollateral,     // ownerCollateral in IDL
+                    collateralMint: new PublicKey(WSOL_MINT), // collateralMint in IDL
+                    vault: vault,                         // vault in IDL
+                    vaultAuthority: vaultAuthority,       // vaultAuthority in IDL
+                    saiMint: new PublicKey(this.saiMint),  // saiMint in IDL
+                    ownerSai: ownerSai,                   // ownerSai in IDL
+                    mintAuthority: mintAuthority,         // mintAuthority in IDL
+                    tokenProgram: TOKEN_PROGRAM_ID,        // tokenProgram in IDL
+                    systemProgram: SystemProgram.programId, // systemProgram in IDL
+                    rent: SYSVAR_RENT_PUBKEY,             // rent in IDL
+                };
+                
+                // Now build instruction with exactly two parameters as specified in IDL
+                const instruction = await this.program.methods
+                    .initializeCdp(
+                        new BN(collateralLamports),
+                        new BN(saiRaw)
+                    )
+                    .accounts(accounts)
+                    .signers([cdpKeypair])  // CDP account is a signer according to IDL
+                    .instruction();
+                
+                transaction.add(instruction);
+            } catch (error) {
+                console.error('Error building instruction:', error);
+                return {
+                    success: false,
+                    error: `Instruction building failed: ${error.message}`
+                };
+            }
             
             // Setup transaction
             const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = this.wallet.publicKey;
             
-            // Try sending with our patched wallet method for maximum compatibility
-            console.log('Sending transaction with patched wallet method...');
+            // Add the CDP keypair as a signer
+            transaction.partialSign(cdpKeypair);
+            
+            // Sign with wallet and send
+            console.log('Transaction prepared, sending...');
             
             try {
                 const signature = await this.wallet.sendTransaction(transaction, this.connection);
-                console.log('Transaction sent successfully:', signature);
+                console.log('Transaction sent with signature:', signature);
                 
                 const confirmation = await this.connection.confirmTransaction({
                     blockhash,
@@ -341,7 +381,7 @@ export class SolanaAPI {
                     signature
                 });
                 
-                console.log('Transaction confirmed:', confirmation);
+                console.log('CDP created successfully!', confirmation);
                 
                 return {
                     success: true,
@@ -349,25 +389,36 @@ export class SolanaAPI {
                     cdp: cdp.toString()
                 };
             } catch (error) {
-                console.error('Error sending transaction:', error);
+                console.error('Transaction error:', error);
                 
-                if (error.message?.includes('rejected')) {
+                // Check for common error messages and provide better explanations
+                if (error.message?.includes('Insufficient funds')) {
+                    return {
+                        success: false,
+                        error: 'Insufficient SOL balance to pay transaction fees and provide collateral'
+                    };
+                } else if (error.message?.includes('rejected')) {
                     return {
                         success: false,
                         error: 'Transaction was rejected by user'
+                    };
+                } else if (error.message?.includes('blockhash')) {
+                    return {
+                        success: false,
+                        error: 'Transaction timed out, please try again'
                     };
                 }
                 
                 return {
                     success: false,
-                    error: error.message
+                    error: error.message || 'Unknown error creating CDP'
                 };
             }
         } catch (error) {
             console.error('Error in createCDP:', error);
             return {
                 success: false,
-                error: error.message
+                error: error.message || 'Unknown error creating CDP'
             };
         }
     }
