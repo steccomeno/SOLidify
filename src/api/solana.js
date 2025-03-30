@@ -318,15 +318,21 @@ export class SolanaAPI {
             
             console.log('Building initializeCdp instruction');
             
-            // Add init CDP instruction
+            // Create BN instances for parameters
+            const collateralBN = new BN(collateralLamports);
+            const saiBN = new BN(saiRaw);
+            
+            console.log('Instruction parameters:', {
+                collateralAmount: collateralBN.toString(),
+                saiAmount: saiBN.toString()
+            });
+            
+            // Add init CDP instruction - FIXED PARAMETERS
             transaction.add(
                 await this.program.methods
                     .initializeCdp(
-                        new BN(cdpBump),
-                        new BN(vaultBump),
-                        new BN(mintAuthorityBump),
-                        new BN(collateralLamports),
-                        new BN(saiRaw)
+                        collateralBN,  // Just pass collateral amount
+                        saiBN         // Just pass SAI amount
                     )
                     .accounts({
                         user: this.wallet.publicKey,
@@ -365,11 +371,6 @@ export class SolanaAPI {
                 if (!phantomWallet || !phantomWallet.isPhantom) {
                     throw new Error('Phantom wallet not available');
                 }
-                
-                const serializedTransaction = transaction.serialize({
-                    requireAllSignatures: false,
-                    verifySignatures: false
-                });
                 
                 // Use the direct Phantom API for maximum compatibility
                 const signedTransaction = await phantomWallet.signAndSendTransaction(transaction);
