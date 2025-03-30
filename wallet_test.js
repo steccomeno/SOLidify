@@ -89,87 +89,106 @@
             console.warn('⚠️ No wallet adapter integration detected - this may cause issues');
         }
 
-        // Attempt direct connect to test Phantom
-        console.log('Attempting direct connect to test Phantom...');
-        window.solana.connect({ onlyIfTrusted: true })
-            .then(response => {
-                console.log('✅ Direct connect succeeded:', {
-                    publicKey: response.publicKey.toString()
-                });
+        // Add a test transaction function to the window
+        window.testPhantomTransaction = async function() {
+            try {
+                console.log('Creating simple transaction to test Phantom wallet...');
                 
-                // Update debug info
-                window.phantomDebug.directConnectSuccess = true;
-                window.phantomDebug.directConnectPublicKey = response.publicKey.toString();
-                
-                // Try to access methods
-                try {
-                    console.log('Testing if signTransaction is available:', 
-                        typeof window.solana.signTransaction === 'function');
-                    console.log('Testing if signAllTransactions is available:', 
-                        typeof window.solana.signAllTransactions === 'function');
-                    console.log('Testing if sendTransaction or signAndSendTransaction is available:',
-                        typeof window.solana.sendTransaction === 'function' || 
-                        typeof window.solana.signAndSendTransaction === 'function');
-                    
-                    window.phantomDebug.hasSignTransaction = typeof window.solana.signTransaction === 'function';
-                    window.phantomDebug.hasSendTransaction = typeof window.solana.sendTransaction === 'function' || 
-                                                     typeof window.solana.signAndSendTransaction === 'function';
-                    
-                    // If sendTransaction is missing, this is a critical issue
-                    if (!window.phantomDebug.hasSendTransaction) {
-                        console.error('❌ CRITICAL: No sendTransaction or signAndSendTransaction method available! This will prevent operations like creating CDPs or minting tokens.');
-                        console.log('Possible fix: Try updating your Phantom wallet extension and reconnecting');
-                    }
-                } catch (err) {
-                    console.error('Error checking transaction signing methods:', err);
+                if (!window.solana.isConnected) {
+                    console.log('Connecting to Phantom wallet first...');
+                    await window.solana.connect();
                 }
                 
-                // Try a simple method patch on the window object to help fix issues
-                console.log('Adding helper function to patch wallet objects...');
-                window.patchPhantomWallet = function(walletObj) {
-                    if (!walletObj) return null;
-                    
-                    console.log('Patching wallet object with Phantom methods...');
-                    
-                    // Ensure publicKey is available
-                    if (!walletObj.publicKey && window.solana.publicKey) {
-                        walletObj.publicKey = window.solana.publicKey;
-                    }
-                    
-                    // Ensure connected flag is set
-                    if (!walletObj.connected && window.solana.isConnected) {
-                        walletObj.connected = true;
-                    }
-                    
-                    // Add missing methods from Phantom
-                    if (!walletObj.signTransaction && window.solana.signTransaction) {
-                        walletObj.signTransaction = (...args) => window.solana.signTransaction(...args);
-                    }
-                    
-                    if (!walletObj.signAllTransactions && window.solana.signAllTransactions) {
-                        walletObj.signAllTransactions = (...args) => window.solana.signAllTransactions(...args);
-                    }
-                    
-                    if (!walletObj.sendTransaction) {
-                        if (window.solana.signAndSendTransaction) {
-                            walletObj.sendTransaction = (...args) => window.solana.signAndSendTransaction(...args);
-                        } else if (window.solana.sendTransaction) {
-                            walletObj.sendTransaction = (...args) => window.solana.sendTransaction(...args);
-                        }
-                    }
-                    
-                    console.log('Wallet patched successfully!');
-                    return walletObj;
-                };
+                if (!window.solana.publicKey) {
+                    throw new Error('No public key available after connect');
+                }
                 
-                console.log('To patch your wallet manually, run: window.patchPhantomWallet(yourWalletObject)');
-                console.log('This might help fix connection issues in the app');
-            })
-            .catch(error => {
-                console.error('❌ Direct connect failed:', error);
-                window.phantomDebug.directConnectSuccess = false;
-                window.phantomDebug.directConnectError = error.message;
-            });
+                // Import libraries from window.SolanaAPI
+                const web3 = window.solanaWeb3 || window.SolanaAPI?.web3;
+                if (!web3) {
+                    throw new Error('Could not find web3 library. Try running this in your app context');
+                }
+                
+                // Create a simple transaction
+                const { Transaction, SystemProgram, PublicKey } = web3;
+                const transaction = new Transaction();
+                
+                // Add a simple SOL transfer instruction (0.001 SOL)
+                transaction.add(
+                    SystemProgram.transfer({
+                        fromPubkey: window.solana.publicKey,
+                        toPubkey: window.solana.publicKey, // Send to self
+                        lamports: 1000 // 0.000001 SOL
+                    })
+                );
+                
+                // Get a recent blockhash
+                console.log('Getting recent blockhash...');
+                const connection = new web3.Connection('https://api.devnet.solana.com', 'confirmed');
+                const { blockhash } = await connection.getRecentBlockhash();
+                transaction.recentBlockhash = blockhash;
+                transaction.feePayer = window.solana.publicKey;
+                
+                console.log('Transaction prepared, sending to Phantom for approval...');
+                
+                // Try direct transaction method
+                const signature = await window.solana.signAndSendTransaction(transaction);
+                console.log('✅ Transaction successful! Signature:', signature);
+                
+                // Confirm transaction
+                const confirmation = await connection.confirmTransaction(signature.signature);
+                console.log('Transaction confirmed:', confirmation);
+                
+                return {
+                    success: true,
+                    signature: signature.signature
+                };
+            } catch (error) {
+                console.error('❌ Transaction test failed:', error);
+                return {
+                    success: false,
+                    error: error.message
+                };
+            }
+        };
+        
+        // Add a simpler test that just requests signing
+        window.testPhantomSigning = async function() {
+            try {
+                console.log('Testing Phantom signing capability...');
+                
+                if (!window.solana.isConnected) {
+                    console.log('Connecting to Phantom wallet first...');
+                    await window.solana.connect();
+                }
+                
+                // Try signing a message
+                const message = new TextEncoder().encode('This is a test message from SOLidify to verify your Phantom wallet is working properly.');
+                
+                console.log('Requesting signature for test message...');
+                const signature = await window.solana.signMessage(message);
+                
+                console.log('✅ Message signing successful!', {
+                    signature: signature.signature,
+                    publicKey: signature.publicKey
+                });
+                
+                return {
+                    success: true,
+                    signature: signature.signature
+                };
+            } catch (error) {
+                console.error('❌ Message signing test failed:', error);
+                return {
+                    success: false,
+                    error: error.message
+                };
+            }
+        };
+        
+        console.log('Tests added to window:');
+        console.log('1. Run window.testPhantomSigning() to test if Phantom can sign messages');
+        console.log('2. Run window.testPhantomTransaction() to test if Phantom can sign and send transactions');
     } else {
         console.error('❌ Phantom wallet is not installed');
     }
@@ -179,9 +198,9 @@
     console.log('1. Make sure Phantom is set to Devnet network in Settings');
     console.log('2. Disconnect your wallet from this site in Phantom settings, then reconnect');
     console.log('3. Try clearing browser cache or using Incognito/Private mode');
-    console.log('4. Refresh the page and try connecting again');
+    console.log('4. Try uninstalling and reinstalling the Phantom wallet extension');
+    console.log('5. Try a different browser (Firefox if you\'re using Chrome, or vice versa)');
     console.log('');
-    console.log('If you have "sendTransaction is not a function" errors:');
-    console.log('This is a known issue with older Phantom versions or wallet adapter issues');
-    console.log('Try manually patching your wallet by refreshing and trying again');
+    console.log('If you see "User rejected" errors, check if the Phantom popup is showing');
+    console.log('Some adblockers or popup blockers can interfere with Phantom wallet popups');
 })(); 

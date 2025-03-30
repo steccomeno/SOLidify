@@ -238,264 +238,176 @@ export class SolanaAPI {
 
     async createCDP(collateralAmount, saiAmount) {
         try {
-            if (!this.wallet || !this.wallet.publicKey) {
-                throw new Error('Wallet not connected');
-            }
-
             console.log(`Creating CDP with ${collateralAmount} SOL collateral for ${saiAmount} SAI`);
-
-            // Convert to lamports/raw amounts (assuming 9 decimals for SOL and 6 for SAI)
-            const collateralLamports = Math.floor(collateralAmount * 1e9); // Convert SOL to lamports
-            const saiRawAmount = Math.floor(saiAmount * 1e6); // Convert SAI to raw units
-
-            console.log(`Using ${collateralLamports} lamports and ${saiRawAmount} raw SAI units`);
-
-            const [cdp] = await PublicKey.findProgramAddress(
-                [Buffer.from('cdp'), this.wallet.publicKey.toBuffer()],
-                PROGRAM_ID
+            
+            // Convert to raw units
+            const collateralLamports = collateralAmount * LAMPORTS_PER_SOL;
+            const saiRaw = saiAmount * Math.pow(10, SAI_DECIMALS);
+            
+            console.log(`Using ${collateralLamports} lamports and ${saiRaw} raw SAI units`);
+            
+            // Derive addresses
+            const [cdp, cdpBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("cdp"), this.wallet.publicKey.toBuffer()],
+                this.program.programId
             );
-
-            const [vault] = await PublicKey.findProgramAddress(
-                [Buffer.from('vault'), cdp.toBuffer()],
-                PROGRAM_ID
+            
+            const [vault, vaultBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("vault"), cdp.toBuffer()],
+                this.program.programId
             );
-
-            const [vaultAuthority] = await PublicKey.findProgramAddress(
-                [Buffer.from('vault_authority'), cdp.toBuffer()],
-                PROGRAM_ID
+            
+            const [mintAuthority, mintAuthorityBump] = await PublicKey.findProgramAddress(
+                [Buffer.from("mint-authority")],
+                this.program.programId
             );
-
-            const [mintAuthority] = await PublicKey.findProgramAddress(
-                [Buffer.from('mint_authority')],
-                PROGRAM_ID
-            );
-
-            console.log('Derived addresses:', {
+            
+            console.log(`Derived addresses:`, {
                 cdp: cdp.toString(),
                 vault: vault.toString(),
                 mintAuthority: mintAuthority.toString()
             });
-
+            
+            // Token accounts
             const ownerCollateral = await getAssociatedTokenAddress(
-                SOL_MINT,
+                new PublicKey(WSOL_MINT), 
                 this.wallet.publicKey
             );
-
+            
             const ownerSai = await getAssociatedTokenAddress(
-                SAI_MINT,
+                new PublicKey(this.saiMint),
                 this.wallet.publicKey
             );
-
-            console.log('Token accounts:', {
+            
+            console.log(`Token accounts:`, {
                 ownerCollateral: ownerCollateral.toString(),
                 ownerSai: ownerSai.toString()
             });
-
-            // Much simpler approach - use wallet.sendTransaction
+            
+            console.log('Using simplified direct approach...');
+            
+            // Check if the SAI token account exists
+            let saiTokenAccountExists = false;
             try {
-                console.log('Using simplified direct approach...');
-                
-                // Check if SAI token account exists, create if needed
-                let needsTokenAccount = false;
-                try {
-                    await getAccount(this.connection, ownerSai);
-                    console.log('SAI token account exists, skipping creation');
-                } catch (error) {
-                    console.log('SAI token account does not exist, will create it');
-                    needsTokenAccount = true;
-                }
-                
-                // Create new Transaction
-                const transaction = new Transaction();
-                transaction.feePayer = this.wallet.publicKey;
-                
-                // Add instruction to create token account if needed
-                if (needsTokenAccount) {
-                    console.log('Adding instruction to create token account');
-                    transaction.add(
-                        createAssociatedTokenAccountInstruction(
-                            this.wallet.publicKey,
-                            ownerSai,
-                            this.wallet.publicKey,
-                            SAI_MINT
-                        )
-                    );
-                }
-                
-                console.log('Building initializeCdp instruction');
-                
-                // Build the initialize CDP instruction
-                const initCdpIx = await this.program.methods
+                const tokenAccountInfo = await this.connection.getAccountInfo(ownerSai);
+                saiTokenAccountExists = !!tokenAccountInfo;
+            } catch (error) {
+                console.log('Error checking SAI token account:', error);
+            }
+            
+            console.log(saiTokenAccountExists ? 'SAI token account exists' : 'SAI token account does not exist, will create it');
+            
+            // Create a new transaction
+            const transaction = new Transaction();
+            
+            // Add create token account instruction if needed
+            if (!saiTokenAccountExists) {
+                console.log('Adding instruction to create token account');
+                transaction.add(
+                    createAssociatedTokenAccountInstruction(
+                        this.wallet.publicKey,
+                        ownerSai,
+                        this.wallet.publicKey,
+                        new PublicKey(this.saiMint)
+                    )
+                );
+            }
+            
+            console.log('Building initializeCdp instruction');
+            
+            // Add init CDP instruction
+            transaction.add(
+                await this.program.methods
                     .initializeCdp(
+                        new BN(cdpBump),
+                        new BN(vaultBump),
+                        new BN(mintAuthorityBump),
                         new BN(collateralLamports),
-                        new BN(saiRawAmount)
+                        new BN(saiRaw)
                     )
                     .accounts({
-                        owner: this.wallet.publicKey,
+                        user: this.wallet.publicKey,
                         cdp,
-                        ownerCollateral,
-                        collateralMint: SOL_MINT,
                         vault,
-                        vaultAuthority,
-                        saiMint: SAI_MINT,
-                        ownerSai,
                         mintAuthority,
+                        userCollateral: ownerCollateral,
+                        userSai: ownerSai,
+                        saiMint: new PublicKey(this.saiMint),
+                        wsolMint: new PublicKey(WSOL_MINT),
                         tokenProgram: TOKEN_PROGRAM_ID,
                         systemProgram: SystemProgram.programId,
                         rent: SYSVAR_RENT_PUBKEY,
                     })
-                    .instruction();
-                    
-                // Add the instruction to the transaction
-                transaction.add(initCdpIx);
+                    .instruction()
+            );
+            
+            // Get recent blockhash
+            const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
+            transaction.recentBlockhash = blockhash;
+            transaction.feePayer = this.wallet.publicKey;
+            
+            console.log('Transaction prepared:', {
+                instructions: transaction.instructions.length,
+                recentBlockhash: blockhash,
+                signers: [this.wallet.publicKey.toString()],
+            });
+            
+            // Try different approaches for transaction signing/sending
+            try {
+                console.log('Directly using signAndSendTransaction from Phantom...');
                 
-                // Get a fresh blockhash
-                const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
-                transaction.recentBlockhash = blockhash;
+                // Get direct access to Phantom for better compatibility
+                const phantomWallet = window.solana;
                 
-                console.log('Transaction prepared:', {
-                    instructions: transaction.instructions.length,
-                    recentBlockhash: transaction.recentBlockhash,
-                    signers: [this.wallet.publicKey.toString()]
-                });
-                
-                // Try standard wallet method first
-                console.log('Sending transaction via wallet.sendTransaction...');
-                let signature;
-                
-                try {
-                    signature = await this.wallet.sendTransaction(transaction, this.connection);
-                    console.log('Transaction sent with signature:', signature);
-                } catch (walletSendError) {
-                    console.error('Error with wallet.sendTransaction:', walletSendError);
-                    
-                    // If the standard approach fails, try direct Phantom API
-                    if (window.solana && window.solana.isPhantom) {
-                        console.log('Trying direct Phantom signAndSendTransaction...');
-                        const phantomResponse = await window.solana.signAndSendTransaction(transaction);
-                        signature = phantomResponse.signature;
-                        console.log('Transaction sent via Phantom API:', signature);
-                    } else {
-                        throw walletSendError;
-                    }
+                if (!phantomWallet || !phantomWallet.isPhantom) {
+                    throw new Error('Phantom wallet not available');
                 }
                 
-                console.log('Waiting for confirmation...');
+                const serializedTransaction = transaction.serialize({
+                    requireAllSignatures: false,
+                    verifySignatures: false
+                });
                 
-                // Wait for confirmation
+                // Use the direct Phantom API for maximum compatibility
+                const signedTransaction = await phantomWallet.signAndSendTransaction(transaction);
+                console.log('Transaction signed and sent:', signedTransaction);
+                
+                // Confirm the transaction
                 const confirmation = await this.connection.confirmTransaction({
-                    signature, 
-                    blockhash, 
-                    lastValidBlockHeight
-                }, 'confirmed');
+                    blockhash,
+                    lastValidBlockHeight,
+                    signature: signedTransaction.signature
+                });
                 
                 console.log('Transaction confirmed:', confirmation);
                 
                 return {
                     success: true,
-                    cdpAddress: cdp.toString(),
-                    signature
+                    signature: signedTransaction.signature,
+                    cdp: cdp.toString()
                 };
-                
             } catch (error) {
-                console.error('Error creating CDP:', error);
+                console.error('Error with Phantom signAndSendTransaction:', error);
                 
-                if (error.message.includes('User rejected')) {
+                // Check if this was a user rejection
+                if (error.message && (
+                    error.message.includes('User rejected') || 
+                    error.message.includes('cancelled') ||
+                    error.message.includes('rejected') ||
+                    error.message.includes('denied')
+                )) {
+                    console.log('Transaction was cancelled by the user');
                     return {
                         success: false,
                         error: 'Transaction was cancelled by the user'
                     };
                 }
                 
-                if (window.solana && typeof window.solana.signTransaction === 'function') {
-                    // Try one last method as a fallback
-                    try {
-                        console.log('Trying manual sign and send approach...');
-                        
-                        // Create a new transaction
-                        const transaction = new Transaction();
-                        
-                        // Add token account creation if needed
-                        let needsTokenAccount = false;
-                        try {
-                            await getAccount(this.connection, ownerSai);
-                        } catch (error) {
-                            needsTokenAccount = true;
-                            transaction.add(
-                                createAssociatedTokenAccountInstruction(
-                                    this.wallet.publicKey,
-                                    ownerSai,
-                                    this.wallet.publicKey,
-                                    SAI_MINT
-                                )
-                            );
-                        }
-                        
-                        // Add CDP initialization instruction
-                        transaction.add(
-                            await this.program.methods
-                                .initializeCdp(
-                                    new BN(collateralLamports),
-                                    new BN(saiRawAmount)
-                                )
-                                .accounts({
-                                    owner: this.wallet.publicKey,
-                                    cdp,
-                                    ownerCollateral,
-                                    collateralMint: SOL_MINT,
-                                    vault,
-                                    vaultAuthority,
-                                    saiMint: SAI_MINT,
-                                    ownerSai,
-                                    mintAuthority,
-                                    tokenProgram: TOKEN_PROGRAM_ID,
-                                    systemProgram: SystemProgram.programId,
-                                    rent: SYSVAR_RENT_PUBKEY,
-                                })
-                                .instruction()
-                        );
-                        
-                        // Get fresh blockhash
-                        const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
-                        transaction.recentBlockhash = blockhash;
-                        transaction.feePayer = this.wallet.publicKey;
-                        
-                        // Sign transaction with Phantom directly
-                        const signedTx = await window.solana.signTransaction(transaction);
-                        console.log('Transaction signed manually');
-                        
-                        // Send the signed transaction
-                        const signature = await this.connection.sendRawTransaction(
-                            signedTx.serialize(),
-                            {
-                                skipPreflight: false,
-                                preflightCommitment: 'confirmed'
-                            }
-                        );
-                        
-                        console.log('Manually signed transaction sent with signature:', signature);
-                        
-                        // Wait for confirmation
-                        const confirmation = await this.connection.confirmTransaction({
-                            signature, 
-                            blockhash, 
-                            lastValidBlockHeight
-                        }, 'confirmed');
-                        
-                        console.log('Transaction confirmed:', confirmation);
-                        
-                        return {
-                            success: true,
-                            cdpAddress: cdp.toString(),
-                            signature
-                        };
-                    } catch (manualError) {
-                        console.error('Manual signing and sending failed:', manualError);
-                        throw manualError;
-                    }
-                } else {
-                    throw error;
-                }
+                // Since the user didn't reject, it might be a technical issue
+                console.error('Technical error during transaction. Will try fallback method.');
+                
+                // Throw up to trigger fallback
+                throw error;
             }
         } catch (error) {
             console.error('Error creating CDP:', error);
@@ -732,52 +644,81 @@ export class SolanaAPI {
 
     async getTokenBalances() {
         try {
-            // Get SOL balance
             const solBalance = await this.connection.getBalance(this.wallet.publicKey);
-            console.log(`Raw SOL balance: ${solBalance} lamports, ${solBalance / 1_000_000_000} SOL`);
+            console.log(`Raw SOL balance: ${solBalance} lamports, ${solBalance / LAMPORTS_PER_SOL} SOL`);
             
-            // Get SAI balance
             let saiBalance = 0;
+            
+            // Log details about what we're using
+            console.log(`Using SAI_MINT: ${this.saiMint}`);
+            console.log(`User wallet: ${this.wallet.publicKey.toString()}`);
+            
             try {
-                console.log(`Using SAI_MINT: ${SAI_MINT.toString()}`);
-                console.log(`User wallet: ${this.wallet.publicKey.toString()}`);
-                
-                const saiTokenAccount = await getAssociatedTokenAddress(
-                    SAI_MINT,
+                // Get the token account address
+                const tokenAccount = await getAssociatedTokenAddress(
+                    new PublicKey(this.saiMint),
                     this.wallet.publicKey
                 );
-                console.log(`SAI token account: ${saiTokenAccount.toString()}`);
+                
+                console.log(`SAI token account: ${tokenAccount.toString()}`);
                 
                 try {
-                    const tokenAccount = await getAccount(this.connection, saiTokenAccount);
-                    console.log(`Token account exists with raw amount: ${tokenAccount.amount}`);
-                    saiBalance = Number(tokenAccount.amount) / 1_000_000; // Assuming 6 decimals
+                    // Try to get the token account
+                    const account = await getAccount(this.connection, tokenAccount);
+                    saiBalance = Number(account.amount) / Math.pow(10, SAI_DECIMALS);
+                    console.log(`Found SAI token account with ${saiBalance} SAI`);
                 } catch (error) {
-                    // Check if the error is because the account doesn't exist
-                    if (error.message && (
-                        error.message.includes('could not find account') || 
-                        error.message.includes('TokenAccountNotFound')
-                    )) {
-                        console.log('SAI token account not found, balance is 0');
-                        
-                        // Check if the user is the admin wallet
-                        console.log(`Checking if user is admin wallet...`);
-                        const adminCheck = this.wallet.publicKey.toString() === tokenInfo.admin;
-                        console.log(`User is admin wallet: ${adminCheck}`);
-                        
-                        if (adminCheck) {
-                            console.log('Admin wallet detected, you may need to mint tokens first');
+                    if (error.name === 'TokenAccountNotFoundError') {
+                        console.log('SAI token account does not exist yet - this is normal for new users');
+                        // Create the token account automatically
+                        try {
+                            console.log('Creating SAI token account automatically...');
+                            const transaction = new Transaction().add(
+                                createAssociatedTokenAccountInstruction(
+                                    this.wallet.publicKey,
+                                    tokenAccount,
+                                    this.wallet.publicKey,
+                                    new PublicKey(this.saiMint)
+                                )
+                            );
+                            
+                            // Get recent blockhash
+                            const { blockhash, lastValidBlockHeight } = await this.connection.getLatestBlockhash();
+                            transaction.recentBlockhash = blockhash;
+                            transaction.feePayer = this.wallet.publicKey;
+                            
+                            console.log('Transaction prepared for creating token account');
+                            
+                            // Try to get window.solana directly
+                            if (window.solana && window.solana.isPhantom) {
+                                try {
+                                    console.log('Using direct Phantom API to create token account');
+                                    const signature = await window.solana.signAndSendTransaction(transaction);
+                                    
+                                    await this.connection.confirmTransaction({
+                                        blockhash,
+                                        lastValidBlockHeight,
+                                        signature: signature.signature
+                                    });
+                                    
+                                    console.log('SAI token account created successfully:', tokenAccount.toString());
+                                } catch (phantomError) {
+                                    console.log('User declined to create SAI token account:', phantomError.message);
+                                }
+                            }
+                        } catch (createError) {
+                            console.error('Failed to create SAI token account automatically:', createError);
                         }
                     } else {
-                        console.error('Error checking SAI balance:', error);
+                        throw error;
                     }
                 }
             } catch (error) {
-                console.error('Error deriving SAI token account:', error);
+                console.error('Error checking SAI balance:', error);
             }
             
             return {
-                sol: solBalance / 1_000_000_000, // Convert lamports to SOL
+                sol: solBalance / LAMPORTS_PER_SOL,
                 sai: saiBalance
             };
         } catch (error) {
