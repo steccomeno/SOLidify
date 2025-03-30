@@ -3,21 +3,54 @@ import { PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY } from '@sola
 import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createTransferInstruction } from '@solana/spl-token';
 import BN from 'bn.js';
 import saiIDL from '../idl/sai.json';
+import tokenInfo from '../scripts/sai_token_info.json';
 
+// Extract Program ID and SAI_MINT from tokenInfo
 const PROGRAM_ID = new PublicKey('GY7XKMrF4VMLBou37oBieKzRM6YZJHnjnic5sorE4rRU');
 const SOL_MINT = new PublicKey('So11111111111111111111111111111111111111112');
 
-// For the SAI token
-const SAI_MINT = new PublicKey('GCbezKCTeHfYc6Z92sQ9ECW29XWDyo6WWmB1Dx74tisB');
+// Get SAI_MINT from token info file
+const SAI_MINT = new PublicKey(tokenInfo.saiMint);
+
+console.log('Token Info Loaded:', {
+    programId: PROGRAM_ID.toString(),
+    saiMint: SAI_MINT.toString(),
+    adminAddress: tokenInfo.admin
+});
 
 export class SolanaAPI {
     constructor(connection, wallet) {
+        console.log('SolanaAPI Constructor - Debug Info:');
+        console.log('Connection object:', {
+            endpoint: connection.rpcEndpoint,
+            commitment: connection.commitment
+        });
+        console.log('Wallet object:', {
+            connected: wallet?.connected,
+            publicKey: wallet?.publicKey?.toString(),
+            hasSignTransaction: typeof wallet?.signTransaction === 'function'
+        });
+        
         this.connection = connection;
         this.wallet = wallet;
-        this.provider = new AnchorProvider(connection, wallet, {
-            commitment: 'confirmed',
-        });
-        this.program = new Program(saiIDL, PROGRAM_ID, this.provider);
+        
+        try {
+            this.provider = new AnchorProvider(connection, wallet, {
+                commitment: 'confirmed',
+            });
+            console.log('AnchorProvider created successfully');
+            
+            try {
+                this.program = new Program(saiIDL, PROGRAM_ID, this.provider);
+                console.log('Program initialized successfully with ID:', PROGRAM_ID.toString());
+            } catch (error) {
+                console.error('Failed to initialize Program:', error);
+            }
+        } catch (error) {
+            console.error('Failed to create AnchorProvider:', error);
+        }
+        
+        console.log('SAI_MINT:', SAI_MINT.toString());
     }
 
     async createCDP(collateralAmount, saiAmount) {

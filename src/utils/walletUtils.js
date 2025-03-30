@@ -7,19 +7,29 @@ import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { Connection, PublicKey, clusterApiUrl } from '@solana/web3.js';
 import { useWallet as useWalletAdapter } from '@solana/wallet-adapter-react';
 
-// Constants
+// Update the network configuration to ensure it's using Devnet
 const NETWORK = WalletAdapterNetwork.Devnet; // Use Devnet for development
+console.log('Wallet configured for network:', NETWORK);
 const RPC_ENDPOINT = process.env.REACT_APP_SOLANA_RPC_HOST || clusterApiUrl(NETWORK);
+console.log('Using RPC endpoint:', RPC_ENDPOINT);
 
 // Create a connection to the Solana cluster
 export const connection = new Connection(RPC_ENDPOINT, {
     commitment: 'confirmed',
     confirmTransactionInitialTimeout: 60000
 });
+console.log('Solana connection established');
 
 // Standalone wallet utility functions
 export const isWalletConnected = (wallet) => {
-  return wallet && wallet.connected && wallet.publicKey;
+  const result = wallet && wallet.connected && wallet.publicKey;
+  console.log('Wallet connection check:', {
+    hasWallet: !!wallet,
+    isConnected: wallet?.connected,
+    hasPublicKey: !!wallet?.publicKey,
+    result: !!result
+  });
+  return result;
 };
 
 export const connectWallet = async () => {

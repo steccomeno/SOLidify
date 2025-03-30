@@ -28,7 +28,7 @@ export const isAPIInitialized = () => {
 
 export const initializeAPI = (wallet) => {
     try {
-        console.log('Attempting to initialize API with wallet:', {
+        console.log('API INIT - STEP 1: Starting initialization with wallet details:', {
             hasWallet: !!wallet,
             connected: wallet?.connected,
             hasPublicKey: !!wallet?.publicKey,
@@ -36,20 +36,33 @@ export const initializeAPI = (wallet) => {
             hasSignTransaction: !!wallet?.signTransaction
         });
 
-        if (!wallet || !wallet.connected) {
-            throw new Error('Wallet is not connected');
+        if (!wallet) {
+            throw new Error('API INIT ERROR: Wallet object is null or undefined');
+        }
+
+        if (!wallet.connected) {
+            throw new Error('API INIT ERROR: Wallet is not connected');
         }
 
         if (!wallet.publicKey) {
-            throw new Error('Wallet public key is not available');
+            throw new Error('API INIT ERROR: Wallet public key is not available');
         }
 
         if (!wallet.signTransaction || typeof wallet.signTransaction !== 'function') {
-            throw new Error('Wallet signTransaction function is not available');
+            throw new Error('API INIT ERROR: Wallet signTransaction function is not available');
         }
+
+        console.log('API INIT - STEP 2: Wallet validated, attempting to create SolanaAPI instance');
+        
+        // Check if connection is valid
+        console.log('API INIT - Connection details:', {
+            endpoint: connection.rpcEndpoint,
+            commitment: connection.commitment
+        });
 
         // Load token info if available
         try {
+            console.log('API INIT - STEP 3: Attempting to load config');
             fetch('/api/config')
                 .then(response => response.json())
                 .then(data => {
@@ -59,13 +72,15 @@ export const initializeAPI = (wallet) => {
                     console.error('Could not load config:', error);
                 });
         } catch (error) {
-            console.warn('Config loading not available:', error);
+            console.warn('API INIT - Config loading not available:', error);
         }
 
+        console.log('API INIT - STEP 4: Creating SolanaAPI instance');
         solanaAPI = new SolanaAPI(connection, wallet);
-        console.log('SolanaAPI instance created successfully');
+        console.log('API INIT - STEP 5: SolanaAPI instance created successfully');
         
         // Test the connection by getting balances
+        console.log('API INIT - STEP 6: Testing connection by fetching balances');
         solanaAPI.getTokenBalances()
             .then(balances => {
                 console.log('Initial balances fetched:', balances);
@@ -74,9 +89,10 @@ export const initializeAPI = (wallet) => {
                 console.error('Error fetching initial balances:', error);
             });
         
+        console.log('API INIT - COMPLETE: API initialized successfully');
         return true;
     } catch (error) {
-        console.error('Failed to initialize API:', error);
+        console.error('API INIT - CRITICAL ERROR:', error);
         solanaAPI = null;
         throw error;
     }

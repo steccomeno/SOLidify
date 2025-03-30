@@ -55,40 +55,78 @@ const SaiInterface = () => {
     const [showLiquidations, setShowLiquidations] = useState(false);
 
     useEffect(() => {
-        const initializeWalletAndLoadData = async () => {
-            if (connected && wallet && publicKey) {
-                try {
-                    console.log('Initializing wallet connection:', {
-                        connected,
-                        hasWallet: !!wallet,
-                        hasPublicKey: !!publicKey,
-                        publicKeyStr: publicKey.toString()
-                    });
+        console.log("SaiInterface - Component mounted");
+        return () => {
+            console.log("SaiInterface - Component unmounted");
+        };
+    }, []);
 
-                    // Clear any existing errors
-                    setError(null);
+    useEffect(() => {
+        console.log("SaiInterface - Wallet connection state changed:", {
+            connected,
+            hasWallet: !!wallet,
+            hasPublicKey: !!publicKey,
+            publicKeyStr: publicKey?.toString()
+        });
+    }, [connected, wallet, publicKey]);
 
-                    // Initialize API if not already initialized
-                    if (!isAPIInitialized()) {
-                        console.log('Initializing API...');
+    const initializeWalletAndLoadData = async () => {
+        console.log("SaiInterface - Initializing wallet and loading data");
+        
+        if (connected && wallet && publicKey) {
+            try {
+                console.log('SaiInterface - Wallet connected:', {
+                    connected,
+                    hasWallet: !!wallet,
+                    hasPublicKey: !!publicKey,
+                    publicKeyStr: publicKey.toString()
+                });
+
+                // Clear any existing errors
+                setError(null);
+
+                // Initialize API if not already initialized
+                if (!isAPIInitialized()) {
+                    console.log('SaiInterface - API not initialized, initializing now...');
+                    try {
                         await initializeAPI(wallet);
+                        console.log('SaiInterface - API initialized successfully');
+                    } catch (apiError) {
+                        console.error('SaiInterface - API initialization failed:', apiError);
+                        setError(`Failed to initialize API: ${apiError.message}`);
+                        return;
                     }
+                } else {
+                    console.log('SaiInterface - API already initialized');
+                }
 
-                    // Load data only after API is initialized
-                    console.log('Loading user data...');
+                // Load data only after API is initialized
+                console.log('SaiInterface - Loading user data...');
+                try {
                     await Promise.all([
                         loadUserCDPs(),
                         loadWalletData(),
                         loadActiveLiquidations()
                     ]);
-                    console.log('User data loaded successfully');
-                } catch (error) {
-                    console.error('Failed to initialize:', error);
-                    setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
+                    console.log('SaiInterface - User data loaded successfully');
+                } catch (dataError) {
+                    console.error('SaiInterface - Failed to load user data:', dataError);
+                    setError(`Failed to load user data: ${dataError.message}`);
                 }
+            } catch (error) {
+                console.error('SaiInterface - Failed to initialize:', error);
+                setError(error.message || 'Failed to initialize wallet connection. Please try reconnecting your wallet.');
             }
-        };
+        } else {
+            console.log('SaiInterface - Wallet not ready:', {
+                connected,
+                hasWallet: !!wallet,
+                hasPublicKey: !!publicKey
+            });
+        }
+    };
 
+    useEffect(() => {
         initializeWalletAndLoadData();
     }, [connected, wallet, publicKey]);
 
@@ -139,11 +177,14 @@ const SaiInterface = () => {
     };
 
     const loadWalletData = async () => {
+        console.log("SaiInterface - Loading wallet balances");
         try {
             const balance = await getWalletBalance();
+            console.log("SaiInterface - Wallet balances received:", balance);
             setWalletBalance(balance);
         } catch (error) {
-            console.error('Error loading wallet data:', error);
+            console.error('SaiInterface - Error loading wallet data:', error);
+            setError(`Failed to load wallet balances: ${error.message}`);
         }
     };
 
