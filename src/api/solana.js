@@ -644,8 +644,26 @@ export class SolanaAPI {
 
     async getTokenBalances() {
         try {
-            const solBalance = await this.connection.getBalance(this.wallet.publicKey);
-            console.log(`Raw SOL balance: ${solBalance} lamports, ${solBalance / LAMPORTS_PER_SOL} SOL`);
+            if (!this.wallet || !this.wallet.publicKey) {
+                console.warn('getTokenBalances: Wallet not connected');
+                return { sol: 0, sai: 0 };
+            }
+
+            // Try multiple times to get SOL balance
+            let solBalance = 0;
+            let attempts = 0;
+            
+            while (attempts < 3) {
+                try {
+                    solBalance = await this.connection.getBalance(this.wallet.publicKey);
+                    console.log(`Raw SOL balance: ${solBalance} lamports, ${solBalance / LAMPORTS_PER_SOL} SOL`);
+                    break; // If successful, exit the loop
+                } catch (balanceError) {
+                    console.warn(`Attempt ${attempts + 1} to get SOL balance failed:`, balanceError);
+                    attempts++;
+                    await new Promise(resolve => setTimeout(resolve, 500)); // Wait 500ms between attempts
+                }
+            }
             
             let saiBalance = 0;
             
@@ -693,7 +711,15 @@ export class SolanaAPI {
                             if (window.solana && window.solana.isPhantom) {
                                 try {
                                     console.log('Using direct Phantom API to create token account');
+                                    // Make sure we're connected
+                                    if (!window.solana.isConnected) {
+                                        console.log('Phantom not connected, connecting first...');
+                                        await window.solana.connect();
+                                    }
+                                    
                                     const signature = await window.solana.signAndSendTransaction(transaction);
+                                    
+                                    console.log('Transaction sent:', signature);
                                     
                                     await this.connection.confirmTransaction({
                                         blockhash,
@@ -710,7 +736,7 @@ export class SolanaAPI {
                             console.error('Failed to create SAI token account automatically:', createError);
                         }
                     } else {
-                        throw error;
+                        console.error('Error getting SAI token account:', error);
                     }
                 }
             } catch (error) {

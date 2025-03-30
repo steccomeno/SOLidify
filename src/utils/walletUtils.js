@@ -112,10 +112,34 @@ export const connectWallet = async () => {
 export const getWalletBalance = async (publicKey) => {
   try {
     if (!publicKey) {
-      throw new Error('No wallet public key provided');
+      console.error('getWalletBalance: No wallet public key provided');
+      return 0;
     }
-    const balance = await connection.getBalance(new PublicKey(publicKey));
-    return balance / 1_000_000_000; // Convert lamports to SOL
+    
+    // Add retry mechanism for more stability
+    let attempts = 0;
+    const maxAttempts = 3;
+    
+    while (attempts < maxAttempts) {
+      try {
+        const balance = await connection.getBalance(new PublicKey(publicKey));
+        return balance / 1_000_000_000; // Convert lamports to SOL
+      } catch (balanceError) {
+        attempts++;
+        console.warn(`getWalletBalance: Attempt ${attempts}/${maxAttempts} failed: ${balanceError.message}`);
+        
+        if (attempts >= maxAttempts) {
+          console.error('getWalletBalance: All attempts failed');
+          return 0;
+        }
+        
+        // Wait before retry
+        await new Promise(resolve => setTimeout(resolve, 500));
+      }
+    }
+    
+    // Fallback
+    return 0;
   } catch (error) {
     console.error('Failed to get wallet balance:', error);
     return 0;
