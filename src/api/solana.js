@@ -280,9 +280,11 @@ export class SolanaAPI {
                     return true;
                 }
             } catch (e) {
-                console.log('Account check failed, attempting creation');
+                console.log('Account check failed:', e);
             }
 
+            console.log('Creating new SAI token account...');
+            
             // Create account
             const transaction = new Transaction();
             
@@ -308,25 +310,45 @@ export class SolanaAPI {
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = this.wallet.publicKey;
 
-            // Sign and send
-            if (window.solana?.isPhantom) {
-                const signed = await window.solana.signTransaction(transaction);
-                const signature = await this.connection.sendRawTransaction(
-                    signed.serialize(),
-                    { skipPreflight: true }
-                );
-                await this.connection.confirmTransaction(signature, 'confirmed');
-            } else {
-                const signature = await this.wallet.sendTransaction(
-                    transaction,
-                    this.connection,
-                    { skipPreflight: true }
-                );
-                await this.connection.confirmTransaction(signature, 'confirmed');
+            // Sign and send with retries
+            let retries = 3;
+            while (retries > 0) {
+                try {
+                    // Sign and send transaction
+                    if (window.solana?.isPhantom) {
+                        console.log('Using Phantom wallet for signing...');
+                        const signed = await window.solana.signTransaction(transaction);
+                        const signature = await this.connection.sendRawTransaction(
+                            signed.serialize(),
+                            { skipPreflight: true }
+                        );
+                        console.log('Transaction sent:', signature);
+                        await this.connection.confirmTransaction(signature, 'confirmed');
+                    } else {
+                        console.log('Using generic wallet adapter...');
+                        const signature = await this.wallet.sendTransaction(
+                            transaction,
+                            this.connection,
+                            { skipPreflight: true }
+                        );
+                        console.log('Transaction sent:', signature);
+                        await this.connection.confirmTransaction(signature, 'confirmed');
+                    }
+
+                    console.log('SAI token account created successfully');
+                    return true;
+                } catch (error) {
+                    console.error(`Attempt ${4 - retries} failed:`, error);
+                    if (error.message?.includes('0x1')) {
+                        throw new Error('Insufficient SOL balance to create token account');
+                    }
+                    retries--;
+                    if (retries === 0) throw error;
+                    await new Promise(resolve => setTimeout(resolve, 1000));
+                }
             }
 
-            console.log('SAI token account created successfully');
-            return true;
+            return false;
         } catch (error) {
             console.error('Error in ensureSaiTokenAccount:', error);
             throw error;
@@ -691,43 +713,29 @@ export class SolanaAPI {
 
             // Get SAI balance
             try {
+                // First ensure the token account exists
+                console.log('Ensuring SAI token account exists...');
+                await this.ensureSaiTokenAccount();
+                
+                // Wait for account creation/confirmation
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
                 // Get the token account address
-                console.log('Getting SAI token account for mint:', this.saiMint.toString());
                 const saiTokenAccount = await getAssociatedTokenAddress(
                     this.saiMint,
                     this.wallet.publicKey
                 );
                 console.log('SAI token account address:', saiTokenAccount.toString());
 
-                try {
-                    // Try to get the account info first
-                    const tokenAccount = await getAccount(this.connection, saiTokenAccount);
-                    const saiAmount = Number(tokenAccount.amount) / Math.pow(10, SAI_DECIMALS);
-                    console.log('SAI balance found:', saiAmount);
-                    return {
-                        sol: solAmount,
-                        sai: saiAmount
-                    };
-                } catch (e) {
-                    if (e.message?.includes('TokenAccountNotFound')) {
-                        console.log('SAI token account not found, creating...');
-                        // Create the token account
-                        await this.ensureSaiTokenAccount();
-                        // Wait for account creation
-                        await new Promise(resolve => setTimeout(resolve, 2000));
-                        // Try to get the balance again
-                        const newAccount = await getAccount(this.connection, saiTokenAccount);
-                        const saiAmount = Number(newAccount.amount) / Math.pow(10, SAI_DECIMALS);
-                        console.log('SAI balance after account creation:', saiAmount);
-                        return {
-                            sol: solAmount,
-                            sai: saiAmount
-                        };
-                    } else {
-                        console.error('Unexpected error getting SAI account:', e);
-                        throw e;
-                    }
-                }
+                // Get the account info
+                const tokenAccount = await getAccount(this.connection, saiTokenAccount);
+                const saiAmount = Number(tokenAccount.amount) / Math.pow(10, SAI_DECIMALS);
+                console.log('SAI balance found:', saiAmount);
+                
+                return {
+                    sol: solAmount,
+                    sai: saiAmount
+                };
             } catch (e) {
                 console.error('Error in SAI balance retrieval:', e);
                 // Return just SOL balance if SAI fails
