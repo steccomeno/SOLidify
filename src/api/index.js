@@ -315,10 +315,33 @@ export const initialize = async () => {
 // Add a flag to the SolanaAPI instance to indicate fast mode
 let isFastMode = false;
 
-// Updated initializeAPI function to handle wallet connection automatically
+// Updated initializeAPI function that works with any wallet adapter
 export const initializeAPI = async (wallet) => {
     try {
-        console.log("Starting API initialization with wallet:", wallet);
+        console.log("Starting API initialization with raw wallet instance");
+        
+        // Check if API is already initialized with a wallet
+        if (solanaAPI && solanaAPI.wallet && solanaAPI.wallet.publicKey) {
+            const existingPubKey = solanaAPI.wallet.publicKey.toString();
+            const currentPubKey = wallet.publicKey ? wallet.publicKey.toString() : null;
+            
+            console.log("API already has a wallet with public key:", existingPubKey);
+            console.log("Current wallet has public key:", currentPubKey);
+            
+            // If current wallet matches existing one, just return true
+            if (currentPubKey && existingPubKey === currentPubKey) {
+                console.log("API already initialized with this wallet, reusing existing initialization");
+                return true;
+            }
+            
+            // If a different wallet is trying to initialize, log a warning
+            if (currentPubKey && existingPubKey !== currentPubKey) {
+                console.warn("WARNING: Attempting to reinitialize API with a different wallet!");
+                console.warn(`Existing: ${existingPubKey}, New: ${currentPubKey}`);
+                // We'll continue with the existing wallet, not replace it
+                return true;
+            }
+        }
         
         // Validate wallet is available
         if (!wallet) {
@@ -326,16 +349,43 @@ export const initializeAPI = async (wallet) => {
             return false;
         }
         
-        // Check if we're using Phantom
-        const isPhantom = wallet.isPhantom || false;
-        console.log("Using Phantom wallet:", isPhantom);
-        
-        // For debugging, log wallet state
-        console.log("Wallet state:", {
-            isConnected: wallet.isConnected || false,
+        // Detailed debug logging of wallet object
+        console.log("Wallet debug info:", {
+            type: typeof wallet,
+            keys: Object.keys(wallet),
             hasPublicKey: !!wallet.publicKey,
-            publicKey: wallet.publicKey?.toString() || 'none'
+            publicKeyType: wallet.publicKey ? typeof wallet.publicKey : 'undefined',
+            publicKeyToString: wallet.publicKey ? 
+                (typeof wallet.publicKey.toString === 'function' ? wallet.publicKey.toString() : 'no toString method') 
+                : 'no publicKey',
+            hasAdapter: !!wallet.adapter,
+            adapterKeys: wallet.adapter ? Object.keys(wallet.adapter) : []
         });
+        
+        // Try to extract a usable public key
+        let publicKey = null;
+        if (wallet.publicKey) {
+            publicKey = wallet.publicKey;
+            console.log("Using direct publicKey from wallet");
+        } else if (wallet.adapter && wallet.adapter.publicKey) {
+            publicKey = wallet.adapter.publicKey;
+            console.log("Using publicKey from wallet.adapter");
+        } else {
+            // Last resort - try to find anything that looks like a public key
+            for (const key of Object.keys(wallet)) {
+                if (wallet[key] && typeof wallet[key] === 'object' && wallet[key].toBase58) {
+                    publicKey = wallet[key];
+                    console.log(`Found publicKey in wallet.${key}`);
+                    break;
+                }
+            }
+        }
+        
+        // Verify we have a usable public key
+        if (!publicKey) {
+            console.error("Could not find usable public key in wallet object");
+            return false;
+        }
         
         // Create or reuse SolanaAPI instance
         if (!solanaAPI) {
@@ -343,19 +393,52 @@ export const initializeAPI = async (wallet) => {
             solanaAPI = new SolanaAPI();
         }
         
-        // Create wallet provider from Phantom
-        const provider = {
-            publicKey: wallet.publicKey,
-            signTransaction: async (tx) => wallet.signTransaction(tx),
-            signAllTransactions: async (txs) => wallet.signAllTransactions(txs),
+        // Create a standardized wallet interface that works with any adapter
+        const standardizedWallet = {
+            publicKey: publicKey,
+            signTransaction: async (tx) => {
+                console.log("Signing transaction with wallet adapter");
+                
+                // Try multiple signing methods in order
+                if (wallet.signTransaction) {
+                    return wallet.signTransaction(tx);
+                } else if (wallet.adapter && wallet.adapter.signTransaction) {
+                    return wallet.adapter.signTransaction(tx);
+                } else if (window.solflare && window.solflare.signTransaction) {
+                    return window.solflare.signTransaction(tx);
+                } else if (window.solana && window.solana.signTransaction) {
+                    return window.solana.signTransaction(tx);
+                }
+                
+                throw new Error("No method to sign transaction found");
+            },
+            signAllTransactions: async (txs) => {
+                console.log("Signing multiple transactions with wallet adapter");
+                
+                // Try multiple signing methods in order
+                if (wallet.signAllTransactions) {
+                    return wallet.signAllTransactions(txs);
+                } else if (wallet.adapter && wallet.adapter.signAllTransactions) {
+                    return wallet.adapter.signAllTransactions(txs);
+                } else if (window.solflare && window.solflare.signAllTransactions) {
+                    return window.solflare.signAllTransactions(txs);
+                } else if (window.solana && window.solana.signAllTransactions) {
+                    return window.solana.signAllTransactions(txs);
+                }
+                
+                throw new Error("No method to sign multiple transactions found");
+            },
             connected: true
         };
         
-        // Set wallet provider
-        console.log("Setting wallet provider...");
-        const providerSet = await solanaAPI.setWalletProvider(provider);
-        if (!providerSet) {
-            console.error("Failed to set wallet provider");
+        // Set the standardized wallet directly
+        solanaAPI.wallet = standardizedWallet;
+        
+        // Initialize the API (with the wallet already set)
+        console.log("Initializing SolanaAPI with standardized wallet...");
+        const initialized = await solanaAPI.initialize();
+        if (!initialized) {
+            console.error("Failed to initialize SolanaAPI");
             return false;
         }
         
@@ -372,7 +455,30 @@ export const initializeAPI = async (wallet) => {
 
 // Check if API is initialized
 export const isAPIInitialized = () => {
-    return !!solanaAPI && solanaAPI.isInitialized && !!solanaAPI.wallet;
+    // First check if the API is initialized in memory
+    const memoryInitialized = !!solanaAPI && solanaAPI.isInitialized && !!solanaAPI.wallet;
+    
+    // If initialized in memory, return true immediately
+    if (memoryInitialized) {
+        return true;
+    }
+    
+    // If not in memory, check if we have initialization flag in localStorage
+    try {
+        const storedInitialized = localStorage.getItem('solidify_api_initialized') === 'true';
+        const storedWallet = localStorage.getItem('solidify_initialized_wallet');
+        
+        if (storedInitialized && storedWallet) {
+            console.log("API not initialized in memory but found initialization flag in localStorage");
+            console.log("Previously initialized with wallet:", storedWallet);
+            return true;
+        }
+    } catch (e) {
+        // Ignore localStorage errors
+    }
+    
+    // If we get here, API is not initialized
+    return false;
 };
 
 // Get token balances with better error handling

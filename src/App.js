@@ -48,35 +48,63 @@ function AppContent() {
   useEffect(() => {
     const initializeWallet = async () => {
       try {
-        if (connected && wallet && publicKey) {
-          console.log('Initializing API with wallet:', {
+        if (connected && wallet) {
+          // Debug wallet object thoroughly before proceeding
+          console.log('DEBUG WALLET:', {
+            wallet,
             connected,
-            hasPublicKey: !!publicKey,
-            publicKey: publicKey.toString(),
-            hasWallet: !!wallet,
-            hasAdapter: !!wallet.adapter
+            publicKeyExists: !!wallet.publicKey,
+            publicKeyToString: wallet.publicKey ? wallet.publicKey.toString() : 'none',
+            adapterExists: !!wallet.adapter,
+            adapterName: wallet.adapter?.name || 'unknown',
+            signTransactionExists: !!wallet.signTransaction,
+            signAllTransactionsExists: !!wallet.signAllTransactions,
+            walletObjectKeys: Object.keys(wallet)
           });
 
-          // Initialize the API with the wallet and handle the result
-          const initialized = await initializeAPI(wallet);
+          // Create a wallet wrapper that ensures the public key is always accessible
+          const walletWrapper = {
+            ...wallet,
+            publicKey: wallet.publicKey,
+            signTransaction: wallet.signTransaction || wallet.adapter?.signTransaction,
+            signAllTransactions: wallet.signAllTransactions || wallet.adapter?.signAllTransactions,
+            connected: true
+          };
+
+          console.log('Using wrapped wallet for initialization');
+          
+          // Initialize the API with the wrapped wallet
+          const initialized = await initializeAPI(walletWrapper);
           if (initialized) {
             console.log('API initialized successfully');
             setApiInitialized(true);
+            // Store initialization status in localStorage as a flag for other components
+            localStorage.setItem('solidify_api_initialized', 'true');
+            // Add null check before calling toString()
+            if (wallet.publicKey) {
+              localStorage.setItem('solidify_initialized_wallet', wallet.publicKey.toString());
+            } else {
+              console.warn('Wallet public key not available when storing to localStorage');
+            }
           } else {
             console.log('API initialization skipped or failed');
             setApiInitialized(false);
+            localStorage.removeItem('solidify_api_initialized');
+            localStorage.removeItem('solidify_initialized_wallet');
           }
         } else {
           console.log('Wallet not ready:', {
             connected,
             hasWallet: !!wallet,
-            hasPublicKey: !!publicKey
+            hasPublicKey: wallet?.publicKey
           });
           setApiInitialized(false);
         }
       } catch (error) {
         console.error('Failed to initialize API:', error);
         setApiInitialized(false);
+        localStorage.removeItem('solidify_api_initialized');
+        localStorage.removeItem('solidify_initialized_wallet');
       }
     };
 

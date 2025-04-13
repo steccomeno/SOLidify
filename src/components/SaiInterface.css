@@ -1439,4 +1439,44 @@ h1 {
 
 .reload-vaults-button:hover {
     background-color: #388E3C;
+}
+
+.vault-actions {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    min-width: 200px;
+}
+
+.repay-form {
+    display: flex;
+    gap: 8px;
+}
+
+.repay-form input {
+    flex: 1;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
+}
+
+.repay-button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 8px 15px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+    white-space: nowrap;
+}
+
+.repay-button:hover {
+    background-color: #45a049;
+}
+
+.repay-button:disabled {
+    background-color: #e0e0e0;
+    cursor: not-allowed;
 } 

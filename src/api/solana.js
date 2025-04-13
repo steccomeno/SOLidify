@@ -1,6 +1,6 @@
 import { Program, AnchorProvider } from '@project-serum/anchor';
-import { PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, LAMPORTS_PER_SOL, Keypair, ComputeBudgetProgram, Connection, sendAndConfirmTransaction } from '@solana/web3.js';
-import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createTransferInstruction, createMintToInstruction, createInitializeMintInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, createBurnInstruction } from '@solana/spl-token';
+import { PublicKey, Transaction, SystemProgram, SYSVAR_RENT_PUBKEY, LAMPORTS_PER_SOL, Keypair, ComputeBudgetProgram, Connection, sendAndConfirmTransaction, clusterApiUrl } from '@solana/web3.js';
+import { TOKEN_PROGRAM_ID, getAssociatedTokenAddress, createAssociatedTokenAccountInstruction, getAccount, createTransferInstruction, createMintToInstruction, createInitializeMintInstruction, ASSOCIATED_TOKEN_PROGRAM_ID, createBurnInstruction, getMint } from '@solana/spl-token';
 import BN from 'bn.js';
 import saiIDL from '../idl/sai.json';
 import tokenInfo from '../scripts/sai_token_info.json';
@@ -170,89 +170,81 @@ export class SolanaAPI {
         console.log('SolanaAPI constructed with SAI_MINT:', this.saiMint.toString());
     }
 
-    async setWalletProvider(provider) {
-        try {
-            console.log("Setting wallet provider:", provider);
-            
-            if (!provider) {
-                console.error("No wallet provider provided");
-                return false;
-            }
-            
-            // Handle Phantom wallet direct connection
-            if (provider.isPhantom) {
-                console.log("Detected Phantom wallet direct connection");
-                this.wallet = {
-                    publicKey: provider.publicKey,
-                    signTransaction: async (tx) => provider.signTransaction(tx),
-                    signAllTransactions: async (txs) => provider.signAllTransactions(txs),
-                    connected: true
-                };
-            } 
-            // Handle wallet adapter
-            else if (provider.adapter || provider.publicKey) {
-                console.log("Detected wallet adapter connection");
-                this.wallet = provider;
-            }
-            else {
-                console.error("Unsupported wallet provider type");
-                return false;
-            }
-            
-            // Ensure we have a valid public key
-            if (!this.wallet.publicKey) {
-                console.error("No public key available in wallet provider");
-                return false;
-            }
-            
-            console.log("Wallet provider set successfully, public key:", this.wallet.publicKey.toString());
-            
-            // Initialize after setting wallet
-            await this.initialize();
-            
-            return true;
-        } catch (error) {
-            console.error("Error setting wallet provider:", error);
-            return false;
-        }
-    }
-
     async initialize() {
         try {
-            console.log("Starting initialization...");
+            console.log("Starting SolanaAPI initialization...");
+            
+            // Check wallet status more thoroughly
+            if (!this.wallet) {
+                console.error("No wallet object set");
+                return false;
+            }
+            
+            console.log("Wallet object inspection:", {
+                type: typeof this.wallet, 
+                keys: Object.keys(this.wallet),
+                hasPublicKey: !!this.wallet.publicKey
+            });
+            
+            // More thorough public key check
+            if (!this.wallet.publicKey) {
+                console.error("Wallet object has no publicKey property");
+                
+                // Try to find a public key using a more thorough search
+                for (const key of Object.keys(this.wallet)) {
+                    const value = this.wallet[key];
+                    if (value && typeof value === 'object') {
+                        console.log(`Checking wallet.${key} for PublicKey...`);
+                        if (value.toBase58 && typeof value.toBase58 === 'function') {
+                            console.log(`Found possible PublicKey in wallet.${key}`);
+                            this.wallet.publicKey = value;
+                            break;
+                        }
+                    }
+                }
+                
+                if (!this.wallet.publicKey) {
+                    return false;
+                }
+            }
+            
+            try {
+                console.log("Using wallet with public key:", this.wallet.publicKey.toString());
+            } catch (e) {
+                console.error("Error stringifying public key:", e);
+                console.log("Public key available but cannot be converted to string");
+            }
             
             // Ensure we have a connection
             if (!this.connection) {
                 console.log("Creating new connection...");
-                this.connection = new Connection('https://api.devnet.solana.com', 'confirmed');
+                this.connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
             }
 
-            // Validate wallet setup
-            if (!this.wallet || !this.wallet.publicKey) {
-                console.error("Wallet not properly set up");
+            // Initialize program with more robust error handling
+            try {
+                console.log("Initializing program...");
+                this.program = new Program(saiIDL, PROGRAM_ID, {
+                    connection: this.connection,
+                    wallet: this.wallet
+                });
+                
+                if (!this.program) {
+                    throw new Error("Program object is null after initialization");
+                }
+            } catch (programError) {
+                console.error("Error initializing program:", programError);
                 return false;
             }
 
-            // Initialize program
-            console.log("Initializing program...");
-            this.program = new Program(saiIDL, PROGRAM_ID, {
-                connection: this.connection,
-                wallet: this.wallet
-            });
-
-            // Verify program initialization
-            if (!this.program) {
-                console.error("Program initialization failed");
-                return false;
-            }
-
-            // Mark as initialized
+            // Mark as initialized and log success
             this.initialized = true;
-            console.log("Initialization completed successfully");
+            console.log("SolanaAPI initialization completed successfully");
+            console.log("Using wallet with public key:", this.wallet.publicKey.toString());
             
             return true;
         } catch (error) {
-            console.error("Initialization failed:", error);
+            console.error("SolanaAPI initialization failed:", error);
             this.initialized = false;
             return false;
         }
@@ -442,246 +434,231 @@ export class SolanaAPI {
         try {
             console.log(`Creating CDP with ${collateralAmount} SOL collateral for ${saiAmount} SAI`);
             
-            // For testing, we need to create our own mint that we control
-            // Instead of using the expected SAI mint (which we don't have authority over)
-            console.log('Creating a new test token mint for this demo');
-            
-            // Validate input
-            if (isNaN(collateralAmount) || collateralAmount <= 0) {
-                return {
-                    success: false,
-                    error: 'Collateral amount must be a positive number'
-                };
+            // Early validation
+            if (!this.isInitialized()) {
+                throw new Error('API not initialized. Please initialize first.');
             }
             
-            if (isNaN(saiAmount) || saiAmount <= 0) {
-                return {
-                    success: false,
-                    error: 'SAI amount must be a positive number'
-                };
+            // Verify wallet before proceeding
+            if (!this.wallet || !this.wallet.publicKey) {
+                throw new Error('No wallet available for transaction signing');
             }
             
-            // Convert to raw units
-            const collateralLamports = Math.floor(collateralAmount * LAMPORTS_PER_SOL);
-            const saiRaw = Math.floor(saiAmount * Math.pow(10, SAI_DECIMALS));
+            console.log("Wallet for transaction:", {
+                publicKey: this.wallet.publicKey.toString(),
+                hasSignTransaction: !!this.wallet.signTransaction,
+                hasSignAllTransactions: !!this.wallet.signAllTransactions
+            });
             
-            console.log(`Using ${collateralLamports} lamports and ${saiRaw} raw SAI units`);
+            console.log("Creating a new test token mint for this demo");
             
-            // Ensure the connection is active
-            if (!this.connection) {
-                this.connection = new Connection('https://api.devnet.solana.com', 'confirmed');
-                console.log('Created new connection to devnet');
-            }
+            // Convert to raw values
+            const lamports = collateralAmount * LAMPORTS_PER_SOL;
+            const saiRaw = new BN(saiAmount * Math.pow(10, SAI_DECIMALS));
             
+            console.log(`Using ${lamports} lamports and ${saiRaw} raw SAI units`);
+            
+            // Ensure connection is active
             try {
                 const version = await this.connection.getVersion();
-                console.log('Connection is active. Solana version:', version);
-            } catch (error) {
-                console.error('Connection test failed:', error);
-                return {
-                    success: false,
-                    error: 'Cannot connect to Solana network. Please check your internet connection.'
-                };
+                console.log("Connection is active. Solana version:", version);
+            } catch (connErr) {
+                console.error("Connection error:", connErr);
+                throw new Error("Failed to connect to Solana network. Please try again.");
             }
             
-            // Step 1: Create a vault keypair to hold SOL
+            // Generate a keypair for the CDP
             const vaultKeypair = Keypair.generate();
-            console.log('Created demo vault account:', vaultKeypair.publicKey.toString());
+            console.log("Created demo vault account:", vaultKeypair.publicKey.toString());
             
-            // Step 2: Get or create SAI token mint
-            // First check if we already have a SAI mint stored in localStorage
-            let mintKeypair;
-            let existingSaiMint = localStorage.getItem('sai_token_mint');
-            
-            if (existingSaiMint) {
-                try {
-                    console.log('Found existing SAI token mint:', existingSaiMint);
-                    // Convert string to PublicKey
-                    this.saiMint = new PublicKey(existingSaiMint);
-                    // Create a dummy keypair (we won't use it for signing since we don't have the private key)
-                    mintKeypair = Keypair.generate();
-                    mintKeypair.publicKey = this.saiMint;
-                } catch (err) {
-                    console.error('Error using existing mint, creating new one:', err);
-                    mintKeypair = Keypair.generate();
-                    this.saiMint = mintKeypair.publicKey;
-                    localStorage.setItem('sai_token_mint', this.saiMint.toString());
-                }
-            } else {
-                // Create a new SAI mint and store it
-                mintKeypair = Keypair.generate();
-                this.saiMint = mintKeypair.publicKey;
-                localStorage.setItem('sai_token_mint', this.saiMint.toString());
-                console.log('Created new SAI token mint:', this.saiMint.toString());
-            }
-            
-            // Get the associated token account for the user's wallet
-            const userTokenAccount = await getAssociatedTokenAddress(
-                this.saiMint,
-                this.wallet.publicKey
-            );
-            console.log('User token account for SAI tokens:', userTokenAccount.toString());
-            
-            // Create a transaction to handle everything
-            const transaction = new Transaction();
-            
-            // Add compute budget for larger transaction
-            transaction.add(
-                ComputeBudgetProgram.setComputeUnitLimit({
-                    units: 400000
-                })
-            );
-            
-            // Check if we're creating a new mint or using an existing one
-            if (!existingSaiMint) {
-                // Step 3: Create the mint account (only if it's new)
+            try {
+                // Create the token mint for this demo
+                const tokenMint = Keypair.generate();
+                this.saiMint = tokenMint.publicKey;
+                console.log("Created new SAI token mint:", this.saiMint.toString());
+                
+                // Split the process into multiple transactions to simplify signing
+
+                // TRANSACTION 1: Create the token mint
+                const createMintTx = new Transaction();
+                createMintTx.add(
+                    ComputeBudgetProgram.setComputeUnitLimit({
+                        units: 400000
+                    })
+                );
+                
+                // Calculate rent for mint account
                 const mintRent = await this.connection.getMinimumBalanceForRentExemption(82);
-                transaction.add(
+                
+                // Add instruction to create account for the mint
+                createMintTx.add(
                     SystemProgram.createAccount({
                         fromPubkey: this.wallet.publicKey,
-                        newAccountPubkey: mintKeypair.publicKey,
+                        newAccountPubkey: tokenMint.publicKey,
                         lamports: mintRent,
                         space: 82,
                         programId: TOKEN_PROGRAM_ID
                     }),
                     createInitializeMintInstruction(
-                        mintKeypair.publicKey,
+                        tokenMint.publicKey,
                         SAI_DECIMALS,
-                        this.wallet.publicKey, // Make the user the mint authority
-                        null,
-                        TOKEN_PROGRAM_ID
+                        this.wallet.publicKey,
+                        null
                     )
                 );
-            }
-            
-            // Check if token account already exists
-            let tokenAccountExists = false;
-            try {
-                const accountInfo = await this.connection.getAccountInfo(userTokenAccount);
-                tokenAccountExists = !!accountInfo;
-                console.log('Token account exists:', tokenAccountExists);
-            } catch (error) {
-                console.log('Error checking token account, assuming it does not exist:', error);
-            }
-            
-            // Step 4: Create the associated token account for the user if it doesn't exist
-            if (!tokenAccountExists) {
-                transaction.add(
+                
+                // Get recent blockhash
+                const { blockhash: mintBlockhash } = await this.connection.getLatestBlockhash('confirmed');
+                createMintTx.recentBlockhash = mintBlockhash;
+                createMintTx.feePayer = this.wallet.publicKey;
+                
+                // Sign with token mint keypair first
+                createMintTx.partialSign(tokenMint);
+                
+                console.log("Transaction 1 prepared, signing with wallet");
+                
+                // Sign with wallet
+                let signedMintTx;
+                try {
+                    // Use direct wallet methods if available
+                    if (window.solflare) {
+                        console.log("Using Solflare window.solflare to sign");
+                        signedMintTx = await window.solflare.signTransaction(createMintTx);
+                    } else if (window.solana) {
+                        console.log("Using Phantom window.solana to sign");
+                        signedMintTx = await window.solana.signTransaction(createMintTx);
+                    } else {
+                        // Instead of directly calling this.wallet.signTransaction, use bind to preserve context
+                        console.log("Using wallet adapter to sign with proper context");
+                        const signFunction = this.wallet.signTransaction.bind(this.wallet);
+                        signedMintTx = await signFunction(createMintTx);
+                    }
+                } catch (signError) {
+                    console.error("Error signing mint transaction:", signError);
+                    throw new Error(`Failed to sign mint transaction: ${signError.message}`);
+                }
+                
+                // Send mint transaction
+                console.log("Sending mint creation transaction");
+                const mintTxId = await this.connection.sendRawTransaction(
+                    signedMintTx.serialize(),
+                    { skipPreflight: true }
+                );
+                
+                console.log("Mint transaction sent:", mintTxId);
+                
+                // Wait for confirmation
+                await this.connection.confirmTransaction(mintTxId, 'confirmed');
+                console.log("Mint transaction confirmed");
+                
+                // TRANSACTION 2: Create token account and mint tokens
+                
+                // Get the token account for the user
+                const userTokenAccount = await getAssociatedTokenAddress(
+                    tokenMint.publicKey,
+                    this.wallet.publicKey
+                );
+                console.log("User token account for SAI tokens:", userTokenAccount.toString());
+                
+                const mintTokensTx = new Transaction();
+                mintTokensTx.add(
+                    ComputeBudgetProgram.setComputeUnitLimit({
+                        units: 400000
+                    })
+                );
+                
+                // Add instruction to create associated token account
+                mintTokensTx.add(
                     createAssociatedTokenAccountInstruction(
                         this.wallet.publicKey,
                         userTokenAccount,
                         this.wallet.publicKey,
-                        this.saiMint
+                        tokenMint.publicKey
                     )
                 );
-            }
-            
-            // Step 5: Create a vault account for SOL collateral
-            const vaultRent = await this.connection.getMinimumBalanceForRentExemption(0);
-            transaction.add(
-                SystemProgram.createAccount({
-                    fromPubkey: this.wallet.publicKey,
-                    newAccountPubkey: vaultKeypair.publicKey,
-                    lamports: vaultRent + collateralLamports, // Include collateral in creation
-                    space: 0,
-                    programId: SystemProgram.programId
-                })
-            );
-            
-            // Step 6: Mint SAI tokens to the user's token account
-            transaction.add(
-                createMintToInstruction(
-                    this.saiMint,
-                    userTokenAccount,
-                    this.wallet.publicKey, // Mint authority (owner)
-                    saiRaw,
-                    [],
-                    TOKEN_PROGRAM_ID
-                )
-            );
-            
-            // Get blockhash for recency
-            const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
-            transaction.recentBlockhash = blockhash;
-            transaction.feePayer = this.wallet.publicKey;
-            
-            // Sign with the necessary keypairs
-            if (!existingSaiMint) {
-                transaction.partialSign(mintKeypair);
-            }
-            transaction.partialSign(vaultKeypair);
-            
-            // Sign with wallet
-            let signedTransaction;
-            if (window.solana?.isPhantom) {
-                console.log('Using Phantom to sign transaction');
-                signedTransaction = await window.solana.signTransaction(transaction);
-            } else if (this.wallet.signTransaction) {
-                console.log('Using wallet adapter to sign transaction');
-                signedTransaction = await this.wallet.signTransaction(transaction);
-            } else {
-                throw new Error("No method to sign transaction");
-            }
-            
-            // Send transaction
-            console.log('Sending transaction...');
-            const txid = await this.connection.sendRawTransaction(
-                signedTransaction.serialize(),
-                { skipPreflight: true }
-            );
-            
-            console.log('Transaction sent:', txid);
-            
-            // Wait for confirmation
-            await this.connection.confirmTransaction(txid, 'confirmed');
-            console.log('Transaction confirmed!');
-            
-            // Show instructions to add the new token to Phantom
-            console.log('To view your tokens in Phantom, add this custom token:', this.saiMint.toString());
-            
-            // Add this mint to our tracked token mints for the user
-            try {
-                // Get the array of token mints from localStorage
-                const userTokens = JSON.parse(localStorage.getItem('user_tokens') || '[]');
-                if (!userTokens.includes(this.saiMint.toString())) {
-                    userTokens.push(this.saiMint.toString());
-                    localStorage.setItem('user_tokens', JSON.stringify(userTokens));
-                }
-            } catch (err) {
-                console.error('Error saving token to localStorage:', err);
-            }
-            
-            // Update cached balances for the UI
-            try {
-                // Get current SAI balance for this token
-                const tokenAccount = await getAccount(this.connection, userTokenAccount);
-                const saiBalance = Number(tokenAccount.amount) / Math.pow(10, SAI_DECIMALS);
                 
-                this._cachedBalances = {
-                    sol: await this.connection.getBalance(this.wallet.publicKey) / LAMPORTS_PER_SOL,
-                    sai: saiBalance
+                // Add instruction to mint tokens
+                mintTokensTx.add(
+                    createMintToInstruction(
+                        tokenMint.publicKey,
+                        userTokenAccount,
+                        this.wallet.publicKey,
+                        saiRaw.toNumber()
+                    )
+                );
+                
+                // Get recent blockhash
+                const { blockhash: tokenBlockhash } = await this.connection.getLatestBlockhash('confirmed');
+                mintTokensTx.recentBlockhash = tokenBlockhash;
+                mintTokensTx.feePayer = this.wallet.publicKey;
+                
+                console.log("Transaction 2 prepared, signing with wallet");
+                
+                // Sign with wallet
+                let signedTokenTx;
+                try {
+                    // Use direct wallet methods if available
+                    if (window.solflare) {
+                        console.log("Using Solflare window.solflare to sign");
+                        signedTokenTx = await window.solflare.signTransaction(mintTokensTx);
+                    } else if (window.solana) {
+                        console.log("Using Phantom window.solana to sign");
+                        signedTokenTx = await window.solana.signTransaction(mintTokensTx);
+                    } else {
+                        // Instead of directly calling this.wallet.signTransaction, use bind to preserve context
+                        console.log("Using wallet adapter to sign with proper context");
+                        const signFunction = this.wallet.signTransaction.bind(this.wallet);
+                        signedTokenTx = await signFunction(mintTokensTx);
+                    }
+                } catch (signError) {
+                    console.error("Error signing token transaction:", signError);
+                    throw new Error(`Failed to sign token transaction: ${signError.message}`);
+                }
+                
+                // Send token transaction
+                console.log("Sending token transaction");
+                const tokenTxId = await this.connection.sendRawTransaction(
+                    signedTokenTx.serialize(),
+                    { skipPreflight: true }
+                );
+                
+                console.log("Token transaction sent:", tokenTxId);
+                
+                // Wait for confirmation
+                await this.connection.confirmTransaction(tokenTxId, 'confirmed');
+                console.log("Token transaction confirmed");
+                
+                // Update cached balances
+                try {
+                    const tokenAccount = await getAccount(this.connection, userTokenAccount);
+                    const saiBalance = Number(tokenAccount.amount) / Math.pow(10, SAI_DECIMALS);
+                    
+                    this._cachedBalances = {
+                        sol: await this.connection.getBalance(this.wallet.publicKey) / LAMPORTS_PER_SOL,
+                        sai: saiBalance
+                    };
+                } catch (err) {
+                    console.error('Error updating cached balances:', err);
+                }
+                
+                return {
+                    success: true,
+                    signature: tokenTxId,
+                    tokenMint: this.saiMint.toString(),
+                    tokenAccount: userTokenAccount.toString(),
+                    vault: vaultKeypair.publicKey.toString(),
+                    message: `Successfully created vault and minted ${saiAmount} SAI tokens. To see these tokens in Phantom, add the custom token: ${this.saiMint.toString()}`
                 };
-            } catch (err) {
-                console.error('Error updating cached balances:', err);
-                this._cachedBalances = {
-                    sol: await this.connection.getBalance(this.wallet.publicKey) / LAMPORTS_PER_SOL,
-                    sai: saiAmount
-                };
+                
+            } catch (setupError) {
+                console.error('Error in CDP setup:', setupError);
+                throw setupError;
             }
-            
-            return {
-                success: true,
-                signature: txid,
-                tokenMint: this.saiMint.toString(),
-                tokenAccount: userTokenAccount.toString(),
-                vault: vaultKeypair.publicKey.toString(),
-                message: `Successfully created vault and minted ${saiAmount} SAI tokens. To see these tokens in Phantom, add the custom token: ${this.saiMint.toString()}`
-            };
         } catch (error) {
             console.error('Error creating CDP:', error);
             return {
                 success: false,
-                error: `Failed to create CDP: ${error.message}`
+                error: error.message || 'Failed to create CDP'
             };
         }
     }
@@ -1136,6 +1113,116 @@ export class SolanaAPI {
             return {
                 success: false,
                 error: `Failed to close vault: ${error.message}`
+            };
+        }
+    }
+
+    async repaySai(vaultAddress, amount) {
+        if (!this.isInitialized()) {
+            throw new Error("API not initialized. Please initialize first.");
+        }
+
+        try {
+            console.log(`Attempting to repay ${amount} SAI for vault ${vaultAddress}`);
+            
+            // Convert amount to raw value with decimals
+            const saiRaw = new BN(amount * Math.pow(10, SAI_DECIMALS));
+
+            // Get user's SAI token account
+            const userTokenAccount = await getAssociatedTokenAddress(
+                this.saiMint,
+                this.wallet.publicKey
+            );
+            
+            console.log("User SAI token account:", userTokenAccount.toString());
+
+            // Create transaction
+            const transaction = new Transaction();
+
+            // Add compute budget for larger transaction
+            transaction.add(
+                ComputeBudgetProgram.setComputeUnitLimit({
+                    units: 400000
+                })
+            );
+
+            // Add instruction to burn SAI tokens
+            transaction.add(
+                createBurnInstruction(
+                    this.saiMint,
+                    userTokenAccount,
+                    this.wallet.publicKey,
+                    saiRaw,
+                    []
+                )
+            );
+
+            // Get recent blockhash
+            const { blockhash } = await this.connection.getLatestBlockhash();
+            transaction.recentBlockhash = blockhash;
+            transaction.feePayer = this.wallet.publicKey;
+
+            console.log("Transaction prepared, signing with wallet");
+            
+            try {
+                // Sign with our wallet
+                let signedTransaction;
+                
+                // Use direct wallet methods if available
+                if (window.solflare) {
+                    console.log("Using Solflare window.solflare to sign");
+                    signedTransaction = await window.solflare.signTransaction(transaction);
+                } else if (window.solana) {
+                    console.log("Using Phantom window.solana to sign");
+                    signedTransaction = await window.solana.signTransaction(transaction);
+                } else {
+                    // Instead of directly calling this.wallet.signTransaction, use bind to preserve context
+                    console.log("Using wallet adapter to sign with proper context");
+                    const signFunction = this.wallet.signTransaction.bind(this.wallet);
+                    signedTransaction = await signFunction(transaction);
+                }
+                
+                console.log("Transaction signed successfully");
+                
+                // Send the transaction
+                const signature = await this.connection.sendRawTransaction(
+                    signedTransaction.serialize(),
+                    { skipPreflight: true }
+                );
+                
+                console.log("Transaction sent:", signature);
+                
+                // Wait for confirmation
+                await this.connection.confirmTransaction(signature, 'confirmed');
+                console.log("Transaction confirmed!");
+                
+                // Update cached balances
+                try {
+                    const tokenAccount = await getAccount(this.connection, userTokenAccount);
+                    const saiBalance = Number(tokenAccount.amount) / Math.pow(10, SAI_DECIMALS);
+                    
+                    this._cachedBalances = {
+                        sol: await this.connection.getBalance(this.wallet.publicKey) / LAMPORTS_PER_SOL,
+                        sai: saiBalance
+                    };
+                } catch (err) {
+                    console.error('Error updating cached balances:', err);
+                }
+                
+                return {
+                    success: true,
+                    signature: signature,
+                    message: `Successfully repaid ${amount} SAI tokens.`
+                };
+            } catch (signError) {
+                console.error("Error signing or sending transaction:", signError);
+                throw new Error(`Transaction signing failed: ${signError.message}`);
+            }
+        } catch (error) {
+            console.error('Error repaying SAI:', error);
+            return {
+                success: false,
+                error: `Failed to repay SAI: ${error.message}`
             };
         }
     }

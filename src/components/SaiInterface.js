@@ -129,22 +129,18 @@ const SaiInterface = () => {
             setLoading(true);
             setError(null);
             
-            // Get Phantom wallet
-            const wallet = window.solana;
-            if (!wallet || !wallet.isPhantom) {
-                throw new Error("Please install Phantom wallet");
-            }
-
-            // Connect wallet if needed
-            if (!wallet.isConnected) {
-                await wallet.connect();
-            }
-
-            // Initialize API automatically
-            console.log("Initializing API...");
-            const initialized = await initializeAPI(wallet);
-            if (!initialized) {
-                throw new Error("Failed to initialize API. Please refresh and try again.");
+            // Check if API is already initialized instead of re-initializing
+            console.log("Checking API initialization status...");
+            if (isAPIInitialized()) {
+                console.log("API already initialized, skipping initialization");
+            } else {
+                // Only initialize if not already initialized
+                console.log("API not initialized, initializing now...");
+                // Use the wallet from the wallet adapter instead of window.solana
+                const initialized = await initializeAPI(wallet);
+                if (!initialized) {
+                    throw new Error("Failed to initialize API. Please refresh and try again.");
+                }
             }
             
             // Load balances
@@ -397,6 +393,70 @@ const SaiInterface = () => {
         }
     };
 
+    // Add function to repay SAI
+    const handleRepayVault = async (vault) => {
+        if (!connected || !publicKey) {
+            setError("Please connect your wallet first");
+            return;
+        }
+        
+        try {
+            setLoading(true);
+            setError(null);
+            
+            const repayAmount = parseFloat(vault.repayAmount);
+            if (isNaN(repayAmount) || repayAmount <= 0) {
+                throw new Error("Please enter a valid amount to repay");
+            }
+            
+            if (repayAmount > balances.sai) {
+                throw new Error("Insufficient SAI balance");
+            }
+
+            console.log(`Repaying ${repayAmount} SAI to vault ${vault.address}`);
+            const result = await repaySai(vault.address, repayAmount);
+            
+            if (!result || !result.success) {
+                throw new Error(result?.error || "Failed to repay SAI");
+            }
+            
+            console.log("SAI repaid successfully:", result);
+            
+            // Update vault in state
+            const updatedVaults = vaults.map(v => {
+                if (v.id === vault.id) {
+                    return {
+                        ...v,
+                        minted: Math.max(0, v.minted - repayAmount),
+                        repayAmount: ''
+                    };
+                }
+                return v;
+            });
+            setVaults(updatedVaults);
+            
+            // Save updated list to localStorage
+            saveVaultsToLocalStorage(updatedVaults);
+            
+            // Show success message
+            setTransactionSuccess(true);
+            setTokenInfo({
+                message: `Successfully repaid ${repayAmount} SAI`
+            });
+            
+            // Refresh balances after a short delay
+            setTimeout(() => {
+                refreshBalances();
+            }, 2000);
+            
+        } catch (err) {
+            console.error("Error repaying SAI:", err);
+            setError("Failed to repay SAI: " + err.message);
+        } finally {
+            setLoading(false);
+        }
+    };
+
     // Wallet connection UI
     if (!connected) {
         return (
@@ -617,13 +677,39 @@ const SaiInterface = () => {
                                                 <p>Token Mint: <code>{vault.tokenMint}</code></p>
                                             </div>
                                         </div>
-                                        <button 
-                                            onClick={() => handleCloseVault(vault)}
-                                            disabled={closingVault}
-                                            className="close-vault-button"
-                                        >
-                                            {closingVault ? 'Closing...' : 'Close Vault'}
-                                        </button>
+                                        <div className="vault-actions">
+                                            <div className="repay-form">
+                                                <input
+                                                    type="number"
+                                                    placeholder="Amount to repay"
+                                                    value={vault.repayAmount || ''}
+                                                    onChange={(e) => {
+                                                        const updatedVaults = vaults.map(v => 
+                                                            v.id === vault.id 
+                                                                ? {...v, repayAmount: e.target.value}
+                                                                : v
+                                                        );
+                                                        setVaults(updatedVaults);
+                                                    }}
+                                                    min="0.1"
+                                                    step="0.1"
+                                                />
+                                                <button 
+                                                    onClick={() => handleRepayVault(vault)}
+                                                    disabled={!vault.repayAmount || vault.repayAmount <= 0}
+                                                    className="repay-button"
+                                                >
+                                                    Repay SAI
+                                                </button>
+                                            </div>
+                                            <button 
+                                                onClick={() => handleCloseVault(vault)}
+                                                disabled={closingVault || vault.minted > 0}
+                                                className="close-vault-button"
+                                            >
+                                                {closingVault ? 'Closing...' : 'Close Vault'}
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
