@@ -186,6 +186,21 @@ export class SolanaAPI {
                 hasPublicKey: !!this.wallet.publicKey
             });
             
+            // Check if solflare or phantom is available and connected
+            let isExternalWalletConnected = false;
+            
+            if (window.solflare && window.solflare.isConnected) {
+                console.log("Solflare wallet is connected");
+                isExternalWalletConnected = true;
+            } else if (window.solana && window.solana.isConnected) {
+                console.log("Phantom wallet is connected");
+                isExternalWalletConnected = true;
+            }
+            
+            if (!isExternalWalletConnected) {
+                console.warn("External wallet providers not connected, checking adapter wallet");
+            }
+            
             // More thorough public key check
             if (!this.wallet.publicKey) {
                 console.error("Wallet object has no publicKey property");
@@ -208,6 +223,12 @@ export class SolanaAPI {
                 }
             }
             
+            // Verify signing capability
+            if (!this.wallet.signTransaction && !window.solflare?.isConnected && !window.solana?.isConnected) {
+                console.error("No signing method available. Cannot initialize without signing capability.");
+                return false;
+            }
+            
             try {
                 console.log("Using wallet with public key:", this.wallet.publicKey.toString());
             } catch (e) {
@@ -219,6 +240,15 @@ export class SolanaAPI {
             if (!this.connection) {
                 console.log("Creating new connection...");
                 this.connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
+            }
+
+            // Test connection
+            try {
+                const version = await this.connection.getVersion();
+                console.log("Connected to Solana. Version:", version);
+            } catch (e) {
+                console.error("Failed to connect to Solana network:", e);
+                return false;
             }
 
             // Initialize program with more robust error handling
@@ -338,14 +368,15 @@ export class SolanaAPI {
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = this.wallet.publicKey;
 
-            // Sign and send the transaction
+            // Sign with our enhanced signing method
+            console.log('Signing token account creation transaction...');
             let signed;
-            if (window.solana?.isPhantom) {
-                signed = await window.solana.signTransaction(transaction);
-            } else if (this.wallet.signTransaction) {
-                signed = await this.wallet.signTransaction(transaction);
-            } else {
-                throw new Error('No method to sign transaction');
+            try {
+                signed = await this.signTransaction(transaction);
+                console.log('Transaction signed successfully');
+            } catch (error) {
+                console.error('Error signing transaction:', error);
+                throw new Error(`Failed to sign transaction: ${error.message}`);
             }
             
             console.log('Sending token account creation transaction...');
@@ -371,31 +402,53 @@ export class SolanaAPI {
             try {
                 // Test existing connection
                 await this.connection.getVersion();
+                console.log("Using existing Solana connection");
                 return this.connection;
             } catch (e) {
                 console.warn('Existing connection failed, creating new one:', e);
             }
         }
 
-        // Try multiple RPC endpoints
+        // Try multiple RPC endpoints with retry logic
         const endpoints = [
             'https://api.devnet.solana.com',
             'https://solana-devnet-rpc.publicnode.com',
-            'https://devnet.genesysgo.net'
+            'https://devnet.genesysgo.net',
+            'https://api.testnet.solana.com'
         ];
 
+        let lastError = null;
+        
+        // Try each endpoint with multiple retries
         for (const endpoint of endpoints) {
-            try {
-                const connection = new Connection(endpoint, 'confirmed');
-                await connection.getVersion();
-                this.connection = connection;
-                return connection;
-            } catch (e) {
-                console.warn(`Failed to connect to ${endpoint}:`, e);
+            console.log(`Trying to connect to ${endpoint}...`);
+            let retries = 0;
+            const maxRetries = 2;
+            
+            while (retries <= maxRetries) {
+                try {
+                    const connection = new Connection(endpoint, 'confirmed');
+                    const version = await connection.getVersion();
+                    console.log(`Successfully connected to ${endpoint}. Version:`, version);
+                    this.connection = connection;
+                    return connection;
+                } catch (e) {
+                    lastError = e;
+                    console.warn(`Failed to connect to ${endpoint} (attempt ${retries + 1}/${maxRetries + 1}):`, e);
+                    retries++;
+                    
+                    if (retries <= maxRetries) {
+                        // Wait before retrying
+                        const delay = 1000 * Math.pow(1.5, retries);
+                        console.log(`Retrying in ${delay}ms...`);
+                        await wait(delay);
+                    }
+                }
             }
         }
 
-        throw new Error('Failed to establish connection to any RPC endpoint');
+        console.error("Failed to establish connection to any RPC endpoint:", lastError);
+        throw new Error('Failed to establish connection to any Solana RPC endpoint');
     }
 
     // Add method to handle rate limit by refreshing connection and retrying
@@ -430,6 +483,134 @@ export class SolanaAPI {
         }
     }
 
+    // Add reconnectWallet method to reconnect when wallet state is lost
+    async reconnectWallet() {
+        console.log("Attempting to reconnect wallet...");
+        
+        // Check if we can auto-reconnect using Solflare or Phantom
+        if (window.solflare && !window.solflare.isConnected) {
+            try {
+                console.log("Attempting to reconnect Solflare wallet...");
+                await window.solflare.connect();
+                console.log("Solflare wallet reconnected");
+                return true;
+            } catch (e) {
+                console.error("Failed to reconnect Solflare wallet:", e);
+            }
+        }
+        
+        if (window.solana && !window.solana.isConnected) {
+            try {
+                console.log("Attempting to reconnect Phantom wallet...");
+                await window.solana.connect();
+                console.log("Phantom wallet reconnected");
+                return true;
+            } catch (e) {
+                console.error("Failed to reconnect Phantom wallet:", e);
+            }
+        }
+        
+        return false;
+    }
+
+    // Create a reliable signing method that works with different wallet types
+    async signTransaction(transaction) {
+        console.log("Using enhanced transaction signing method");
+        
+        try {
+            // Try each method in sequence and return the first one that works
+            
+            // Method 1: Direct Solflare access through window object
+            if (window.solflare && window.solflare.isConnected) {
+                console.log("Attempting direct Solflare signing via window.solflare");
+                try {
+                    const signedTx = await window.solflare.signTransaction(transaction);
+                    console.log("Direct Solflare signing successful");
+                    return signedTx;
+                } catch (err) {
+                    console.warn("Direct Solflare signing failed:", err.message);
+                }
+            }
+            
+            // Method 2: Direct Phantom access
+            if (window.solana && window.solana.isConnected) {
+                console.log("Attempting direct Phantom signing via window.solana");
+                try {
+                    const signedTx = await window.solana.signTransaction(transaction);
+                    console.log("Direct Phantom signing successful");
+                    return signedTx;
+                } catch (err) {
+                    console.warn("Direct Phantom signing failed:", err.message);
+                }
+            }
+            
+            // Method 3: Direct wallet adapter approach with JS execution
+            if (this.wallet && typeof this.wallet.signTransaction === 'function') {
+                console.log("Attempting direct wallet adapter signing with JS execution");
+                
+                // Create a new function identical to the wallet's signTransaction
+                // but without relying on "this" context or emit
+                const directSignFn = new Function(
+                    'transaction',
+                    'wallet',
+                    `
+                    return new Promise((resolve, reject) => {
+                        try {
+                            const originalSignFn = wallet.signTransaction;
+                            // Using direct function execution to avoid 'this' context issues
+                            const result = originalSignFn(transaction);
+                            if (result && result.then) {
+                                result.then(resolve).catch(reject);
+                            } else {
+                                resolve(result);
+                            }
+                        } catch (err) {
+                            reject(err);
+                        }
+                    });
+                    `
+                );
+                
+                try {
+                    // Execute our direct function
+                    return await directSignFn(transaction, this.wallet);
+                } catch (err) {
+                    console.warn("Direct JS execution signing failed:", err.message);
+                }
+            }
+            
+            // Method 4: Last attempt - try with a fallback manual proxy
+            console.log("Attempting signing with fallback manual proxy");
+            try {
+                const wallet = this.wallet;
+                const signFn = wallet.signTransaction;
+                
+                // Create a proxy method that doesn't rely on this.emit
+                const signedTx = await new Promise((resolve, reject) => {
+                    try {
+                        // Directly call the function with transaction as argument
+                        const result = signFn.apply(wallet, [transaction]);
+                        if (result instanceof Promise) {
+                            result.then(resolve).catch(reject);
+                        } else {
+                            resolve(result);
+                        }
+                    } catch (err) {
+                        reject(err);
+                    }
+                });
+                
+                return signedTx;
+            } catch (err) {
+                console.error("All signing methods failed:", err);
+                throw new Error(`Transaction signing failed: ${err.message}. Please reconnect your wallet and try again.`);
+            }
+        } catch (error) {
+            console.error("Wallet signing critical failure:", error);
+            throw new Error(`Critical transaction signing error: ${error.message}. Please reconnect your wallet and try again.`);
+        }
+    }
+
     async createCDP(collateralAmount, saiAmount) {
         try {
             console.log(`Creating CDP with ${collateralAmount} SOL collateral for ${saiAmount} SAI`);
@@ -439,15 +620,46 @@ export class SolanaAPI {
                 throw new Error('API not initialized. Please initialize first.');
             }
             
-            // Verify wallet before proceeding
+            // Ensure wallet is connected and available
             if (!this.wallet || !this.wallet.publicKey) {
-                throw new Error('No wallet available for transaction signing');
+                console.warn('No wallet available, trying to reconnect...');
+                // Try to auto-reconnect
+                if (window.solflare && !window.solflare.isConnected) {
+                    try {
+                        await window.solflare.connect();
+                        console.log("Reconnected to Solflare wallet");
+                    } catch (e) {
+                        console.error("Failed to reconnect Solflare wallet:", e);
+                    }
+                } else if (window.solana && !window.solana.isConnected) {
+                    try {
+                        await window.solana.connect();
+                        console.log("Reconnected to Phantom wallet");
+                    } catch (e) {
+                        console.error("Failed to reconnect Phantom wallet:", e);
+                    }
+                }
+                
+                // Check again after reconnection attempts
+                if (!this.wallet || !this.wallet.publicKey) {
+                    throw new Error('No wallet available. Please connect your wallet and try again.');
+                }
             }
             
-            console.log("Wallet for transaction:", {
-                publicKey: this.wallet.publicKey.toString(),
-                hasSignTransaction: !!this.wallet.signTransaction,
-                hasSignAllTransactions: !!this.wallet.signAllTransactions
+            // Double-check signing capability
+            const canSignWithSolflare = window.solflare && window.solflare.isConnected;
+            const canSignWithPhantom = window.solana && window.solana.isConnected;
+            const canSignWithAdapter = this.wallet && typeof this.wallet.signTransaction === 'function';
+            
+            if (!canSignWithSolflare && !canSignWithPhantom && !canSignWithAdapter) {
+                throw new Error('No signing method available. Please reconnect your wallet and try again.');
+            }
+            
+            console.log("Wallet signing capabilities:", {
+                solflare: canSignWithSolflare,
+                phantom: canSignWithPhantom,
+                adapter: canSignWithAdapter,
+                publicKey: this.wallet.publicKey.toString()
             });
             
             console.log("Creating a new test token mint for this demo");
@@ -517,22 +729,11 @@ export class SolanaAPI {
                 
                 console.log("Transaction 1 prepared, signing with wallet");
                 
-                // Sign with wallet
+                // Sign with wallet using our enhanced signing method
                 let signedMintTx;
                 try {
-                    // Use direct wallet methods if available
-                    if (window.solflare) {
-                        console.log("Using Solflare window.solflare to sign");
-                        signedMintTx = await window.solflare.signTransaction(createMintTx);
-                    } else if (window.solana) {
-                        console.log("Using Phantom window.solana to sign");
-                        signedMintTx = await window.solana.signTransaction(createMintTx);
-                    } else {
-                        // Instead of directly calling this.wallet.signTransaction, use bind to preserve context
-                        console.log("Using wallet adapter to sign with proper context");
-                        const signFunction = this.wallet.signTransaction.bind(this.wallet);
-                        signedMintTx = await signFunction(createMintTx);
-                    }
+                    signedMintTx = await this.signTransaction(createMintTx);
+                    console.log("Transaction 1 signed successfully");
                 } catch (signError) {
                     console.error("Error signing mint transaction:", signError);
                     throw new Error(`Failed to sign mint transaction: ${signError.message}`);
@@ -587,29 +788,36 @@ export class SolanaAPI {
                     )
                 );
                 
+                // Add instruction to create a vault account with collateral
+                const vaultRent = await this.connection.getMinimumBalanceForRentExemption(0);
+                const collateralLamports = Math.floor(collateralAmount * LAMPORTS_PER_SOL);
+                
+                // Create vault account and transfer SOL to it
+                mintTokensTx.add(
+                    SystemProgram.createAccount({
+                        fromPubkey: this.wallet.publicKey,
+                        newAccountPubkey: vaultKeypair.publicKey,
+                        lamports: vaultRent + collateralLamports, // Include the collateral amount
+                        space: 0,
+                        programId: SystemProgram.programId
+                    })
+                );
+                
                 // Get recent blockhash
                 const { blockhash: tokenBlockhash } = await this.connection.getLatestBlockhash('confirmed');
                 mintTokensTx.recentBlockhash = tokenBlockhash;
                 mintTokensTx.feePayer = this.wallet.publicKey;
                 
+                // Sign with vault keypair for SystemProgram.createAccount
+                mintTokensTx.partialSign(vaultKeypair);
+                
                 console.log("Transaction 2 prepared, signing with wallet");
                 
-                // Sign with wallet
+                // Sign with wallet using our enhanced signing method
                 let signedTokenTx;
                 try {
-                    // Use direct wallet methods if available
-                    if (window.solflare) {
-                        console.log("Using Solflare window.solflare to sign");
-                        signedTokenTx = await window.solflare.signTransaction(mintTokensTx);
-                    } else if (window.solana) {
-                        console.log("Using Phantom window.solana to sign");
-                        signedTokenTx = await window.solana.signTransaction(mintTokensTx);
-                    } else {
-                        // Instead of directly calling this.wallet.signTransaction, use bind to preserve context
-                        console.log("Using wallet adapter to sign with proper context");
-                        const signFunction = this.wallet.signTransaction.bind(this.wallet);
-                        signedTokenTx = await signFunction(mintTokensTx);
-                    }
+                    signedTokenTx = await this.signTransaction(mintTokensTx);
+                    console.log("Transaction 2 signed successfully");
                 } catch (signError) {
                     console.error("Error signing token transaction:", signError);
                     throw new Error(`Failed to sign token transaction: ${signError.message}`);
@@ -628,6 +836,14 @@ export class SolanaAPI {
                 await this.connection.confirmTransaction(tokenTxId, 'confirmed');
                 console.log("Token transaction confirmed");
                 
+                // Save token mint address to localStorage for balance tracking
+                const existingTokens = JSON.parse(localStorage.getItem('user_tokens') || '[]');
+                if (!existingTokens.includes(tokenMint.publicKey.toString())) {
+                    existingTokens.push(tokenMint.publicKey.toString());
+                    localStorage.setItem('user_tokens', JSON.stringify(existingTokens));
+                    console.log('Saved token mint to localStorage:', tokenMint.publicKey.toString());
+                }
+                
                 // Update cached balances
                 try {
                     const tokenAccount = await getAccount(this.connection, userTokenAccount);
@@ -640,6 +856,9 @@ export class SolanaAPI {
                 } catch (err) {
                     console.error('Error updating cached balances:', err);
                 }
+                
+                // Refresh balances to show newly minted tokens
+                await this.refreshBalances();
                 
                 return {
                     success: true,
@@ -754,7 +973,7 @@ export class SolanaAPI {
                     }
                 }
             } catch (err) {
-                console.error('Error checking user tokens:', err);
+                console.error('Error checking user token balances:', err);
             }
             
             // Save balances to cache
@@ -763,13 +982,11 @@ export class SolanaAPI {
                 sai: totalSaiBalance
             };
             
-            console.log('Updated balances:', this._cachedBalances);
+            console.log('Final balances:', this._cachedBalances);
             return this._cachedBalances;
         } catch (error) {
-            console.error('Error in getTokenBalances:', error);
-            
-            // Return last known balances or default
-            return this._cachedBalances || { sol: 0, sai: 0 };
+            console.error('Error getting token balances:', error);
+            throw error;
         }
     }
 
@@ -869,15 +1086,26 @@ export class SolanaAPI {
         }
     }
 
-    // Add method to refresh balances
+    // Add refreshBalances method to refresh cached balances
     async refreshBalances() {
         try {
+            console.log('Refreshing balances...');
+            if (!this.wallet || !this.wallet.publicKey) {
+                console.warn('refreshBalances: No wallet connected');
+                return { sol: 0, sai: 0 };
+            }
+            
+            // Force a fresh balance check by bypassing rate limits
+            lastBalanceCheck = 0;
+            
+            // Get fresh balances
             const balances = await this.getTokenBalances();
-            console.log('Balances refreshed:', balances);
+            console.log('Refreshed balances:', balances);
+            
             return balances;
         } catch (error) {
             console.error('Error refreshing balances:', error);
-            return { sol: 0, sai: 0 };
+            return this._cachedBalances || { sol: 0, sai: 0 };
         }
     }
 
@@ -946,14 +1174,15 @@ export class SolanaAPI {
                 // Sign with mint keypair
                 transaction.partialSign(mintKeypair);
                 
-                // Sign with wallet
+                // Sign with wallet using our enhanced signing method
+                console.log('Signing mint creation transaction...');
                 let signedTransaction;
-                if (window.solana?.isPhantom) {
-                    signedTransaction = await window.solana.signTransaction(transaction);
-                } else if (this.wallet.signTransaction) {
-                    signedTransaction = await this.wallet.signTransaction(transaction);
-                } else {
-                    throw new Error("No method to sign transaction");
+                try {
+                    signedTransaction = await this.signTransaction(transaction);
+                    console.log('Transaction signed successfully');
+                } catch (error) {
+                    console.error('Error signing transaction:', error);
+                    throw new Error(`Failed to sign transaction: ${error.message}`);
                 }
                 
                 // Send transaction
@@ -1075,16 +1304,15 @@ export class SolanaAPI {
             transaction.recentBlockhash = blockhash;
             transaction.feePayer = this.wallet.publicKey;
             
-            // Sign with wallet
+            // Sign with our enhanced signing method
+            console.log('Signing vault closure transaction...');
             let signedTransaction;
-            if (window.solana?.isPhantom) {
-                console.log('Using Phantom to sign transaction');
-                signedTransaction = await window.solana.signTransaction(transaction);
-            } else if (this.wallet.signTransaction) {
-                console.log('Using wallet adapter to sign transaction');
-                signedTransaction = await this.wallet.signTransaction(transaction);
-            } else {
-                throw new Error("No method to sign transaction");
+            try {
+                signedTransaction = await this.signTransaction(transaction);
+                console.log('Transaction signed successfully');
+            } catch (error) {
+                console.error('Error signing transaction:', error);
+                throw new Error(`Failed to sign transaction: ${error.message}`);
             }
             
             // Send transaction
@@ -1146,14 +1374,14 @@ export class SolanaAPI {
                 })
             );
 
-            // Add instruction to burn SAI tokens
+            // Add instruction to burn SAI tokens - FIX THE PARAMETER ORDER
             transaction.add(
                 createBurnInstruction(
-                    this.saiMint,
-                    userTokenAccount,
-                    this.wallet.publicKey,
-                    saiRaw,
-                    []
+                    userTokenAccount,  // account (not mint)
+                    this.saiMint,      // mint
+                    this.wallet.publicKey,  // owner
+                    saiRaw,            // amount
+                    []                 // signers
                 )
             );
 
@@ -1165,23 +1393,8 @@ export class SolanaAPI {
             console.log("Transaction prepared, signing with wallet");
             
             try {
-                // Sign with our wallet
-                let signedTransaction;
-                
-                // Use direct wallet methods if available
-                if (window.solflare) {
-                    console.log("Using Solflare window.solflare to sign");
-                    signedTransaction = await window.solflare.signTransaction(transaction);
-                } else if (window.solana) {
-                    console.log("Using Phantom window.solana to sign");
-                    signedTransaction = await window.solana.signTransaction(transaction);
-                } else {
-                    // Instead of directly calling this.wallet.signTransaction, use bind to preserve context
-                    console.log("Using wallet adapter to sign with proper context");
-                    const signFunction = this.wallet.signTransaction.bind(this.wallet);
-                    signedTransaction = await signFunction(transaction);
-                }
-                
+                // Sign with our enhanced signing method
+                const signedTransaction = await this.signTransaction(transaction);
                 console.log("Transaction signed successfully");
                 
                 // Send the transaction

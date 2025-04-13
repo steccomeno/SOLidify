@@ -764,4 +764,109 @@ export const closeVault = async (vaultAddress, tokenMint, tokenAmount) => {
             error: error.message || "Failed to close vault"
         };
     }
+};
+
+async function verifyWalletConnection() {
+    // Try to detect and connect to Solflare if it exists but isn't connected
+    if (window.solflare && !window.solflare.isConnected) {
+        console.log("Solflare detected but not connected. Attempting to connect...");
+        try {
+            await window.solflare.connect();
+            console.log("Solflare connected successfully");
+            return true;
+        } catch (e) {
+            console.error("Error connecting to Solflare:", e);
+        }
+    }
+    
+    // Try to detect and connect to Phantom if it exists but isn't connected  
+    if (window.solana && !window.solana.isConnected) {
+        console.log("Phantom detected but not connected. Attempting to connect...");
+        try {
+            await window.solana.connect();
+            console.log("Phantom connected successfully");
+            return true;
+        } catch (e) {
+            console.error("Error connecting to Phantom:", e);
+        }
+    }
+    
+    // Return true if any wallet is already connected
+    if ((window.solflare && window.solflare.isConnected) || 
+        (window.solana && window.solana.isConnected)) {
+        console.log("Wallet already connected");
+        return true;
+    }
+    
+    console.warn("No connected wallet found and unable to auto-connect");
+    return false;
+}
+
+async function initWalletApi() {
+    console.log("Initializing wallet API...");
+    
+    // First verify wallet connections
+    await verifyWalletConnection();
+
+    // Now set up the API with the wallet
+    const wallet = getWallet();
+    solanaApi.wallet = wallet;
+    
+    // Try to set the SAI mint to a stored value if it exists
+    const storedSaiMint = localStorage.getItem('sai_token_mint');
+    if (storedSaiMint) {
+        try {
+            solanaApi.saiMint = new PublicKey(storedSaiMint);
+            console.log("Using stored SAI mint:", solanaApi.saiMint.toString());
+        } catch (err) {
+            console.error("Error parsing stored SAI mint:", err);
+        }
+    }
+
+    // Initialize the API
+    const initialized = await solanaApi.initialize();
+    
+    if (initialized) {
+        console.log("Wallet API initialized successfully");
+        isInitialized = true;
+        
+        try {
+            // Get token accounts and balances
+            const balances = await solanaApi.getTokenBalances();
+            console.log("Initial balances:", balances);
+        } catch (error) {
+            console.error("Error getting initial balances:", error);
+        }
+    } else {
+        console.error("Failed to initialize wallet API");
+    }
+    
+    return initialized;
+}
+
+// Initialize the API
+export const init = async (wallet = null) => {
+    try {
+        if (isInitialized && wallet === null) {
+            console.log('API already initialized');
+            return true;
+        }
+
+        // Initialize wallet API
+        const success = await initWalletApi();
+        
+        if (success) {
+            // Try to auto-create token account if needed
+            try {
+                await solanaApi.ensureSaiTokenAccount();
+            } catch (e) {
+                console.warn('Failed to ensure SAI token account:', e);
+            }
+        }
+        
+        return success;
+    } catch (error) {
+        console.error('API initialization error:', error);
+        return false;
+    }
 }; 
