@@ -3,7 +3,7 @@ use anchor_spl::token::{self, Token, TokenAccount, Mint, MintTo, Transfer, Burn}
 use anchor_lang::solana_program::system_instruction;
 use anchor_spl::token::spl_token::instruction::AuthorityType;
 
-declare_id!("CB2Mj3T59QjuxmSaZyFyqJ3axfmT1Wk3s9jZyss1RvaA");
+declare_id!("HftHVr8ftn9mHsY8JuoKxYAoXDyu58Vkfr8hzxbXWXqf");
 
 #[program]
 pub mod sai {

@@ -8,8 +8,8 @@ skip-lint = false
 seeds = false
 
 [programs.devnet]
-sld = "Dwsz8qV5sFxSFiDKiiDzanW51iqqPok66CWemcaXn6T1"
-sai = "CB2Mj3T59QjuxmSaZyFyqJ3axfmT1Wk3s9jZyss1RvaA"
+sai = "HftHVr8ftn9mHsY8JuoKxYAoXDyu58Vkfr8hzxbXWXqf"
+sld = "HftHVr8ftn9mHsY8JuoKxYAoXDyu58Vkfr8hzxbXWXqf"
 
 [programs.localnet]
 sld = "8FYHabEUMRChx5J6sUUcmNAAeoYmEuznLfP4KHHpk1DY"
@@ -20,7 +20,7 @@ url = "https://api.apr.dev"
 
 [provider]
 cluster = "localnet"
-wallet = "./admin_keypair.json"
+wallet = "~/.config/solana/id.json"
 
 [workspace]
 members = ["programs/sai", "programs/sld"]

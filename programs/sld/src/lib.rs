@@ -2,7 +2,7 @@ use anchor_lang::prelude::*;
 use anchor_spl::token::{self, Token, TokenAccount, Mint};
 use anchor_lang::solana_program::system_instruction;
 
-declare_id!("Dwsz8qV5sFxSFiDKiiDzanW51iqqPok66CWemcaXn6T1");
+declare_id!("VrzGbEB4PBEM5g1RrJn7A82gGbwPYtc9TvZjqY3NUzM");
 
 #[program]
 pub mod sld {

@@ -8,11 +8,11 @@ import LiquidationDashboard from './pages/LiquidationDashboard';
 import LaunchScreen from './components/LaunchScreen';
 import ErrorBoundary from './components/ErrorBoundary';
 import LoadingSpinner from './components/LoadingSpinner';
-import { BrowserRouter as Router, Routes, Route, Link, useLocation } from 'react-router-dom';
+import { BrowserRouter as Router, Routes, Route, Link, useLocation, Navigate } from 'react-router-dom';
 import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { ConnectionProvider, WalletProvider } from '@solana/wallet-adapter-react';
 import { WalletModalProvider } from '@solana/wallet-adapter-react-ui';
-import { PhantomWalletAdapter } from '@solana/wallet-adapter-phantom';
+import { PhantomWalletAdapter, SolflareWalletAdapter } from '@solana/wallet-adapter-wallets';
 import { clusterApiUrl } from '@solana/web3.js';
 import { useWallet } from '@solana/wallet-adapter-react';
 import { WalletMultiButton } from '@solana/wallet-adapter-react-ui';
@@ -24,7 +24,11 @@ require('@solana/wallet-adapter-react-ui/styles.css');
 // Set up network and wallet adapters
 const network = WalletAdapterNetwork.Devnet;
 const endpoint = clusterApiUrl(network);
-const wallets = [new PhantomWalletAdapter()];
+const wallets = [
+  new PhantomWalletAdapter(),
+  new SolflareWalletAdapter(),
+  // Add more wallets here if needed
+];
 
 function AppContent() {
   const [activeTab, setActiveTab] = useState('home');
@@ -43,8 +47,8 @@ function AppContent() {
 
   useEffect(() => {
     const initializeWallet = async () => {
-      if (connected && wallet && publicKey) {
-        try {
+      try {
+        if (connected && wallet && publicKey) {
           console.log('Initializing API with wallet:', {
             connected,
             hasPublicKey: !!publicKey,
@@ -53,19 +57,25 @@ function AppContent() {
             hasAdapter: !!wallet.adapter
           });
 
-          // Initialize the API with the wallet
-          initializeAPI(wallet);
-          setApiInitialized(true);
-        } catch (error) {
-          console.error('Failed to initialize API:', error);
+          // Initialize the API with the wallet and handle the result
+          const initialized = await initializeAPI(wallet);
+          if (initialized) {
+            console.log('API initialized successfully');
+            setApiInitialized(true);
+          } else {
+            console.log('API initialization skipped or failed');
+            setApiInitialized(false);
+          }
+        } else {
+          console.log('Wallet not ready:', {
+            connected,
+            hasWallet: !!wallet,
+            hasPublicKey: !!publicKey
+          });
           setApiInitialized(false);
         }
-      } else {
-        console.log('Wallet not ready:', {
-          connected,
-          hasWallet: !!wallet,
-          hasPublicKey: !!publicKey
-        });
+      } catch (error) {
+        console.error('Failed to initialize API:', error);
         setApiInitialized(false);
       }
     };

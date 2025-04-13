@@ -1,6 +1,7 @@
 {
   "version": "0.1.0",
   "name": "sai",
+  "programId": "HftHVr8ftn9mHsY8JuoKxYAoXDyu58Vkfr8hzxbXWXqf",
   "instructions": [
     {
       "name": "initializeSaiMint",

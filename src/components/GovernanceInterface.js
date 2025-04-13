@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import {
   getAllProposals as getProposals,
-  getProposalInfo as getProposalDetails,
+  getProposalDetails,
   castVote,
   createProposal,
   getUserSLDBalance,

@@ -9,14 +9,14 @@ const saiIdl = require('../idl/sai.json');
 const sldIdl = require('../idl/sld.json');
 
 // Program IDs
-const SAI_PROGRAM_ID = new PublicKey("8guzFQJmPyKjUQy5zrjTsZciRQNEsKUcijJpt1XrYxKn");
-const SLD_PROGRAM_ID = new PublicKey("9iD5jGxmPHdpkXKNQkzCkewHBbaNyuQA8EY8TUr7WY5W");
+const SAI_PROGRAM_ID = new PublicKey("HftHVr8ftn9mHsY8JuoKxYAoXDyu58Vkfr8hzxbXWXqf");
+const SLD_PROGRAM_ID = new PublicKey("VrzGbEB4PBEM5g1RrJn7A82gGbwPYtc9TvZjqY3NUzM");
 
 async function main() {
     console.log("Starting initialization...");
 
     // Connection setup
-    const connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
+    const connection = new Connection('http://127.0.0.1:8899', 'confirmed');
     
     // Load or create admin keypair
     let adminKeypair;
@@ -64,12 +64,12 @@ async function main() {
         { 
             publicKey: adminKeypair.publicKey, 
             signTransaction: async (tx) => {
-                tx.partialSign(adminKeypair);
+                tx.sign(adminKeypair);
                 return tx;
             },
             signAllTransactions: async (txs) => {
                 return txs.map(tx => {
-                    tx.partialSign(adminKeypair);
+                    tx.sign(adminKeypair);
                     return tx;
                 });
             }
@@ -102,6 +102,20 @@ async function main() {
         const sldMintKeypair = Keypair.generate();
         console.log(`SLD mint public key: ${sldMintKeypair.publicKey.toString()}`);
         
+        // Create the mint account first
+        const createMintTx = new Transaction().add(
+            SystemProgram.createAccount({
+                fromPubkey: adminKeypair.publicKey,
+                newAccountPubkey: sldMintKeypair.publicKey,
+                space: 82,
+                lamports: await connection.getMinimumBalanceForRentExemption(82),
+                programId: TOKEN_PROGRAM_ID,
+            })
+        );
+        
+        await sendAndConfirmTransaction(connection, createMintTx, [adminKeypair, sldMintKeypair]);
+        console.log("Created mint account");
+        
         // Setup governance and SLD mint
         const initGovTx = await sldProgram.methods
             .initializeGovernance(
@@ -117,7 +131,7 @@ async function main() {
                 systemProgram: SystemProgram.programId,
                 rent: SYSVAR_RENT_PUBKEY,
             })
-            .signers([adminKeypair, sldMintKeypair])
+            .signers([adminKeypair])
             .rpc();
         
         console.log(`SLD mint and governance initialized! Transaction signature: ${initGovTx}`);

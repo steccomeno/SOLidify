@@ -18,7 +18,11 @@ module.exports = {
     historyApiFallback: true,
     port: 3001,
     hot: true,
-    open: true
+    open: {
+      app: {
+        name: 'google chrome'
+      }
+    }
   },
   resolve: {
     extensions: ['.js', '.jsx'],
@@ -29,7 +33,9 @@ module.exports = {
       "http": require.resolve("stream-http"),
       "https": require.resolve("https-browserify"),
       "os": require.resolve("os-browserify/browser"),
-      "url": require.resolve("url/")
+      "url": require.resolve("url/"),
+      "vm": require.resolve("vm-browserify"),
+      "zlib": require.resolve("browserify-zlib")
     }
   },
   module: {

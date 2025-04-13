@@ -1,6 +1,7 @@
 {
   "version": "0.1.0",
   "name": "sld",
+  "programId": "VrzGbEB4PBEM5g1RrJn7A82gGbwPYtc9TvZjqY3NUzM",
   "instructions": [
     {
       "name": "initializeGovernance",

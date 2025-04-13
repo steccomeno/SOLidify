@@ -6,6 +6,7 @@ import { Connection, PublicKey } from '@solana/web3.js';
 const PROGRAM_ID = new PublicKey('GY7XKMrF4VMLBou37oBieKzRM6YZJHnjnic5sorE4rRU');
 
 let solanaAPI = null;
+let api = null;
 
 // Updated RPC endpoints list with free alternatives only
 const RPC_ENDPOINTS = {
@@ -217,25 +218,69 @@ if (typeof window !== 'undefined') {
 
 // Mock wallet connection function
 export const connectWallet = async () => {
-    if (!window.solana) {
-        throw new Error('Phantom wallet not found');
+    console.log('Attempting to connect wallet...');
+    
+    // Check if Phantom is installed
+    if (!window.solana || !window.solana.isPhantom) {
+        console.error('Phantom wallet not detected');
+        return {
+            success: false,
+            error: 'Phantom wallet not installed. Please install Phantom from https://phantom.app/'
+        };
     }
+    
     try {
+        // Check if already connected
+        if (window.solana.isConnected) {
+            console.log('Wallet already connected, returning current connection');
+            try {
+                // Force disconnect and reconnect to ensure fresh connection
+                await window.solana.disconnect();
+                console.log('Forced disconnect for a fresh connection');
+                // Small delay before reconnecting
+                await new Promise(resolve => setTimeout(resolve, 500));
+            } catch (discError) {
+                console.log('Error during disconnect (can be ignored):', discError);
+            }
+        }
+        
+        console.log('Requesting Phantom wallet connection...');
         const response = await window.solana.connect();
+        
+        console.log('Phantom wallet connected successfully:', {
+            publicKey: response.publicKey.toString(),
+            isConnected: window.solana.isConnected
+        });
+        
+        // Add wallet to global window for easier debugging
+        window.phantomWallet = {
+            publicKey: response.publicKey.toString(),
+            isConnected: window.solana.isConnected
+        };
+        
         return {
             success: true,
             publicKey: response.publicKey.toString()
         };
     } catch (error) {
+        console.error('Error connecting to Phantom wallet:', error);
+        
+        // Provide user-friendly error message based on error type
+        let userMessage = 'Failed to connect wallet: ' + error.message;
+        
+        if (error.message.includes('declined')) {
+            userMessage = 'Connection request declined. Please approve the connection request in your Phantom wallet.';
+        } else if (error.message.includes('timeout')) {
+            userMessage = 'Connection request timed out. Please try again and respond to the wallet prompt.';
+        } else if (error.message.includes('already in progress')) {
+            userMessage = 'A connection request is already pending. Please check your Phantom wallet for a connection prompt.';
+        }
+        
         return {
             success: false,
-            error: error.message
+            error: userMessage
         };
     }
-};
-
-export const isAPIInitialized = () => {
-    return solanaAPI !== null;
 };
 
 // Updated initialize function with recovery logic
@@ -267,206 +312,120 @@ export const initialize = async () => {
   }
 };
 
-// Updated initializeAPI function with better error handling
+// Add a flag to the SolanaAPI instance to indicate fast mode
+let isFastMode = false;
+
+// Updated initializeAPI function to handle wallet connection automatically
 export const initializeAPI = async (wallet) => {
     try {
-        console.log('API INIT - STEP 1: Starting initialization with wallet details:', {
-            hasWallet: !!wallet,
-            connected: wallet?.connected,
-            hasPublicKey: !!wallet?.publicKey,
-            publicKeyStr: wallet?.publicKey?.toString(),
-            hasSignTransaction: typeof wallet?.signTransaction === 'function'
-        });
-
+        console.log("Starting API initialization with wallet:", wallet);
+        
+        // Validate wallet is available
         if (!wallet) {
-            throw new Error('API INIT ERROR: Wallet object is null or undefined');
-        }
-
-        // Handle case where wallet adapter doesn't have public key but Phantom is connected
-        if (!wallet.publicKey && window.solana && window.solana.isPhantom && window.solana.isConnected) {
-            console.log('API INIT - Wallet adapter missing publicKey but Phantom is connected. Attempting to fix...');
-            if (window.solana.publicKey) {
-                console.log('API INIT - Found publicKey in window.solana:', window.solana.publicKey.toString());
-                // Patch the wallet object
-                wallet.publicKey = window.solana.publicKey;
-                console.log('API INIT - Patched wallet with publicKey from window.solana');
-            } else {
-                console.error('API INIT - Phantom is connected but publicKey not available in window.solana');
-            }
-        }
-
-        if (!wallet.connected && window.solana && window.solana.isPhantom) {
-            console.log('API INIT - Wallet not showing as connected, checking Phantom directly...');
-            if (window.solana.isConnected) {
-                console.log('API INIT - Phantom reports connected status, proceeding anyway');
-                // Patch the wallet object
-                wallet.connected = true;
-                console.log('API INIT - Patched wallet.connected = true');
-            } else {
-                throw new Error('API INIT ERROR: Wallet is not connected');
-            }
-        } else if (!wallet.connected) {
-            throw new Error('API INIT ERROR: Wallet is not connected');
-        }
-
-        if (!wallet.publicKey) {
-            throw new Error('API INIT ERROR: Wallet public key is not available');
-        }
-
-        if (!wallet.signTransaction || typeof wallet.signTransaction !== 'function') {
-            // If window.solana has the signTransaction method, use that
-            if (window.solana && typeof window.solana.signTransaction === 'function') {
-                console.log('API INIT - Using window.solana.signTransaction');
-                wallet.signTransaction = (...args) => window.solana.signTransaction(...args);
-            } else {
-                throw new Error('API INIT ERROR: Wallet signTransaction function is not available');
-            }
-        }
-
-        console.log('API INIT - STEP 2: Wallet validated, attempting to create SolanaAPI instance');
-        
-        // Try to get connection with multiple retries
-        let connection = null;
-        let connectionAttempts = 0;
-        const maxConnectionAttempts = 3;
-        
-        while (!connection && connectionAttempts < maxConnectionAttempts) {
-            try {
-                connectionAttempts++;
-                console.log(`API INIT - Connection attempt ${connectionAttempts}/${maxConnectionAttempts}`);
-                connection = await getConnection('devnet');
-            } catch (connectionError) {
-                console.error(`API INIT - Connection attempt ${connectionAttempts} failed:`, connectionError);
-                
-                if (connectionAttempts >= maxConnectionAttempts) {
-                    console.error('API INIT - All connection attempts failed, using emergency fallback');
-                    // Emergency fallback to default connection
-                    connection = new Connection('https://api.devnet.solana.com', 'confirmed');
-                } else {
-                    // Wait before retry
-                    await new Promise(resolve => setTimeout(resolve, 2000));
-                }
-            }
+            console.error("No wallet provided for initialization");
+            return false;
         }
         
-        console.log('Connection established with endpoint:', connection.rpcEndpoint);
+        // Check if we're using Phantom
+        const isPhantom = wallet.isPhantom || false;
+        console.log("Using Phantom wallet:", isPhantom);
         
-        // Load token info if available
-        try {
-            console.log('API INIT - STEP 3: Attempting to load config');
-            fetch('/api/config')
-                .then(response => response.json())
-                .then(data => {
-                    console.log('Config loaded:', data);
-                })
-                .catch(error => {
-                    console.error('Could not load config:', error);
-                });
-        } catch (error) {
-            console.warn('API INIT - Config loading not available:', error);
-        }
-
-        console.log('API INIT - STEP 4: Creating SolanaAPI instance');
-        solanaAPI = new SolanaAPI(wallet, PROGRAM_ID.toString());
+        // For debugging, log wallet state
+        console.log("Wallet state:", {
+            isConnected: wallet.isConnected || false,
+            hasPublicKey: !!wallet.publicKey,
+            publicKey: wallet.publicKey?.toString() || 'none'
+        });
         
-        // Initialize the API with the connection
-        try {
-            await solanaAPI.ensureConnection();
-            console.log('Connection ensured, initializing program...');
-            
-            const programInitResult = await solanaAPI.initialize();
-            
-            if (!programInitResult) {
-                // Check if we have specific error information
-                if (window.solanaInitError) {
-                    console.error('Program initialization failed with error:', window.solanaInitError.message);
-                    console.error('Original error:', window.solanaInitError.originalError);
-                    
-                    // If it's a rate limit or network issue, we can try to recover
-                    if (window.solanaInitError.message.includes('Rate limit') || 
-                        window.solanaInitError.message.includes('Network error')) {
-                        
-                        console.log('Attempting recovery with different connection...');
-                        
-                        // Try a different endpoint
-                        await refreshConnection();
-                        
-                        // Wait a moment
-                        await new Promise(resolve => setTimeout(resolve, 3000));
-                        
-                        // Try initialization again
-                        const secondAttemptResult = await solanaAPI.initialize();
-                        
-                        if (!secondAttemptResult) {
-                            throw new Error(`Failed to initialize Solana program after multiple attempts: ${window.solanaInitError.message}`);
-                        } else {
-                            console.log('Program initialization succeeded on second attempt');
-                        }
-                    } else {
-                        throw new Error(`Failed to initialize Solana program: ${window.solanaInitError.message}`);
-                    }
-                } else {
-                    throw new Error('Failed to initialize Solana program: Unknown error');
-                }
-            }
-        } catch (initError) {
-            console.error('Program initialization failed:', initError);
-            
-            // Check if we have a fallback method for simple operations
-            console.log('Attempting to configure minimal API functionality...');
-            
-            // Set up minimal functionality
-            solanaAPI.program = null;
-            solanaAPI.getTokenBalances = async function() {
-                try {
-                    // Basic SOL balance check that doesn't require program
-                    if (this.wallet && this.wallet.publicKey && this.connection) {
-                        const solBalance = await this.connection.getBalance(this.wallet.publicKey);
-                        return {
-                            sol: solBalance / 1_000_000_000,
-                            sai: 0
-                        };
-                    }
-                    return { sol: 0, sai: 0 };
-                } catch (e) {
-                    console.error('Error in minimal getTokenBalances:', e);
-                    return { sol: 0, sai: 0 };
-                }
-            };
-            
-            // Throw the original error for handling
-            throw initError;
+        // Create or reuse SolanaAPI instance
+        if (!solanaAPI) {
+            console.log("Creating new SolanaAPI instance");
+            solanaAPI = new SolanaAPI();
         }
         
-        // Make the API available globally for debugging
-        window.solanaAPI = solanaAPI;
+        // Create wallet provider from Phantom
+        const provider = {
+            publicKey: wallet.publicKey,
+            signTransaction: async (tx) => wallet.signTransaction(tx),
+            signAllTransactions: async (txs) => wallet.signAllTransactions(txs),
+            connected: true
+        };
         
-        console.log('API INIT - STEP 5: SolanaAPI instance created successfully');
+        // Set wallet provider
+        console.log("Setting wallet provider...");
+        const providerSet = await solanaAPI.setWalletProvider(provider);
+        if (!providerSet) {
+            console.error("Failed to set wallet provider");
+            return false;
+        }
         
-        // Test the connection by getting balances
-        console.log('API INIT - STEP 6: Testing connection by fetching balances');
-        solanaAPI.getTokenBalances()
-            .then(balances => {
-                console.log('Initial balances fetched:', balances);
-            })
-            .catch(error => {
-                console.error('Error fetching initial balances:', error);
-            });
+        // Make global API available
+        api = solanaAPI;
         
-        console.log('API INIT - COMPLETE: API initialized successfully');
+        console.log("API initialization completed successfully");
         return true;
     } catch (error) {
-        console.error('API INIT - CRITICAL ERROR:', error);
-        solanaAPI = null;
-        throw error;
+        console.error("API initialization failed:", error);
+        return false;
     }
 };
 
-export const createCDP = async (collateralAmount, saiAmount) => {
-    if (!solanaAPI) {
-        throw new Error('API not initialized. Please connect your wallet first.');
+// Check if API is initialized
+export const isAPIInitialized = () => {
+    return !!solanaAPI && solanaAPI.isInitialized && !!solanaAPI.wallet;
+};
+
+// Get token balances with better error handling
+export const getTokenBalances = async (publicKey) => {
+    try {
+        if (!solanaAPI) {
+            console.error("API not initialized");
+            throw new Error("API not initialized. Please connect your wallet.");
+        }
+        
+        // Check if we have cached balances from a recent transaction
+        if (solanaAPI._cachedBalances) {
+            console.log("Using cached balances:", solanaAPI._cachedBalances);
+            const cachedBalances = solanaAPI._cachedBalances;
+            
+            // Clear the cache so future calls will fetch fresh balances
+            solanaAPI._cachedBalances = null;
+            
+            return cachedBalances;
+        }
+        
+        // If no cache, get actual balances
+        return await solanaAPI.getTokenBalances(publicKey);
+    } catch (error) {
+        console.error("Error getting token balances:", error);
+        // Return zero balances instead of throwing
+        return { sol: 0, sai: 0 };
     }
-    return await solanaAPI.createCDP(collateralAmount, saiAmount);
+};
+
+// Export createCDP function with better error handling
+export const createCDP = async (collateralAmount, saiAmount) => {
+    try {
+        console.log(`Creating CDP with ${collateralAmount} SOL and ${saiAmount} SAI`);
+        
+        // Check if API is initialized
+        if (!api) {
+            console.error('API not initialized');
+            return {
+                success: false,
+                error: 'API not initialized. Please initialize first.'
+            };
+        }
+        
+        // Call the createCDP method on the SolanaAPI instance
+        return await api.createCDP(collateralAmount, saiAmount);
+    } catch (error) {
+        console.error('Error creating CDP:', error);
+        return {
+            success: false,
+            error: error.message || 'Failed to create CDP'
+        };
+    }
 };
 
 export const addCollateral = async (cdpAddress, amount) => {
@@ -630,7 +589,6 @@ export const createProposal = async (title, description, changes) => {
 
 // Export aliases for function names that are used in the components
 export const getAllProposals = getProposals;
-export const getProposalInfo = getProposalDetails;
 export const getUserSLDBalance = async () => {
   await delay(800);
   return 5000; // Mock SLD balance
@@ -684,87 +642,20 @@ export const transferSai = async (recipientAddress, amount) => {
     }
 };
 
-// Function for admin to mint test SAI tokens
-export const mintTestSAI = async (amount) => {
-    if (!solanaAPI) {
-        throw new Error('API not initialized. Please connect your wallet first.');
-    }
-    
+// Export closeVault function to allow users to get their SOL back
+export const closeVault = async (vaultAddress, tokenMint, tokenAmount) => {
     try {
-        // Check if the caller is the admin
-        if (solanaAPI.wallet.publicKey.toString() !== '9J5dNhAcuTs9HqWksBTy3iPvTieH2B8ETtE1td7zr4K1') {
-            return {
-                success: false,
-                error: 'Only the admin can mint test tokens'
-            };
+        if (!solanaAPI) {
+            console.error("API not initialized");
+            throw new Error("API not initialized. Please connect your wallet.");
         }
         
-        console.log(`Admin attempting to mint ${amount} SAI tokens for testing...`);
-        
-        // Call the mintSai function in the solanaAPI
-        return await solanaAPI.mintTestSAI(amount);
+        return await solanaAPI.closeVault(vaultAddress, tokenMint, tokenAmount);
     } catch (error) {
-        console.error('Error minting test SAI:', error);
+        console.error("Error closing vault:", error);
         return {
             success: false,
-            error: error.message
+            error: error.message || "Failed to close vault"
         };
     }
-};
-
-// Add getTokenBalances function before the exports
-export const getTokenBalances = async () => {
-    if (!solanaAPI) {
-        console.warn('getTokenBalances: Solana API not initialized');
-        return {
-            success: false,
-            error: 'Wallet not connected'
-        };
-    }
-    
-    try {
-        return await solanaAPI.getTokenBalances();
-    } catch (error) {
-        console.error('Error getting token balances:', error);
-        return {
-            success: false,
-            error: error.message
-        };
-    }
-};
-
-// Keep only one export list
-// Remove initialize, getConnection, connectWallet, getWalletBalance, and getUserCDPs since they're already exported earlier
-export {
-    getCDPInfo,
-    createCDP,
-    closeCDP,
-    drawSai,
-    repaySai,
-    addCollateral,
-    // Governance
-    getGovernanceData,
-    getUserSLDBalance,
-    getProposals,
-    getProposalInfo,
-    createProposal,
-    castVote,
-    executeProposal,
-    getProposalDetails,
-    getAllProposals,
-    // Liquidations
-    checkVaultLiquidationRisk,
-    getAllActiveLiquidations,
-    bidOnLiquidationAuction,
-    getLiquidationHistoryForUser,
-    // Price Oracle
-    getCollateralPrice,
-    // SAI Transfer
-    transferSai,
-    // Admin functions
-    mintTestSAI,
-    // Utils
-    isAPIInitialized,
-    initializeAPI
-    // getTokenBalances is already exported as a named export above
 }; 

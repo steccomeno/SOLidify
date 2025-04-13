@@ -7,6 +7,7 @@ import { WalletAdapterNetwork } from '@solana/wallet-adapter-base';
 import { Connection, PublicKey, clusterApiUrl, Keypair } from '@solana/web3.js';
 import { useWallet as useWalletAdapter } from '@solana/wallet-adapter-react';
 import { getConnection } from '../api';
+import { getAccount, TOKEN_PROGRAM_ID } from '@solana/spl-token';
 
 // Update the network configuration to ensure it's using Devnet
 const NETWORK = WalletAdapterNetwork.Devnet; // Use Devnet for development
@@ -14,55 +15,175 @@ console.log('Wallet configured for network:', NETWORK);
 const RPC_ENDPOINT = process.env.REACT_APP_SOLANA_RPC_HOST || clusterApiUrl(NETWORK);
 console.log('Using RPC endpoint:', RPC_ENDPOINT);
 
-// Replace the static connection with one that uses the rotation system
-let connection = null;
+// Track the current active connection
+let activeConnection = null;
 
-// Initialize the connection using the rotation system
-export const initConnection = async () => {
-  try {
-    if (!connection) {
-      console.log('Initializing Solana connection with rotation system');
-      connection = await getConnection('devnet');
-      console.log('Connection initialized:', connection.rpcEndpoint);
-    }
-    return connection;
-  } catch (error) {
-    console.error('Error initializing connection:', error);
-    // Fallback to default connection if rotation system fails
-    console.log('Falling back to default connection');
-    connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
-    return connection;
-  }
-};
+// Define default RPC endpoints with updated URLs
+const DEFAULT_ENDPOINT = 'https://api.devnet.solana.com';
+const BACKUP_ENDPOINTS = [
+  'https://solana-devnet-rpc.publicnode.com',
+  'https://api.devnet.solana.com',
+  'https://devnet.genesysgo.net', 
+  'https://rpc.ankr.com/solana_devnet',
+  'https://devnet.solana.com',
+  'https://api.testnet.solana.com',
+  'https://solana-api.projectserum.com'
+];
 
-// Function to refresh connection if needed (useful after rate limit errors)
-export const refreshConnection = async () => {
-  console.log('Refreshing Solana connection...');
-  connection = await getConnection('devnet');
-  console.log('Connection refreshed:', connection.rpcEndpoint);
-  return connection;
-};
-
-// Get the current connection or initialize if not available
+// Initialize or get the active connection
 export const getActiveConnection = async () => {
-  if (!connection) {
-    return initConnection();
+  // If we already have a connection, return it, but verify it's still good first
+  if (activeConnection) {
+    try {
+      // Try a simple call to make sure the connection is still working
+      await activeConnection.getVersion();
+      return activeConnection;
+    } catch (e) {
+      console.log('Existing connection failed, creating a new one');
+      // Fall through to create a new connection
+    }
   }
-  return connection;
+
+  // Try to connect to each endpoint one by one
+  console.log('Creating new Solana connection...');
+  
+  // Combine all endpoints into a single array to try
+  const allEndpoints = [DEFAULT_ENDPOINT, ...BACKUP_ENDPOINTS];
+  
+  for (const endpoint of allEndpoints) {
+    try {
+      console.log(`Trying to connect to: ${endpoint}`);
+      const connection = new Connection(endpoint, {
+        commitment: 'confirmed',
+        confirmTransactionInitialTimeout: 60000, // 1 minute
+        disableRetryOnRateLimit: false
+      });
+      
+      // Test the connection with a simple call
+      await connection.getVersion();
+      
+      // If we got here, connection is working
+      console.log(`Successfully connected to: ${endpoint}`);
+      activeConnection = connection;
+      return connection;
+    } catch (error) {
+      console.error(`Failed to connect to: ${endpoint}`, error);
+      // Continue to next endpoint
+    }
+  }
+  
+  // If we got here, all endpoints failed
+  console.error('All Solana RPC endpoints failed');
+  
+  // Create a fallback connection anyway - sometimes getVersion fails but other operations work
+  try {
+    console.log('Creating fallback connection to default endpoint');
+    activeConnection = new Connection(DEFAULT_ENDPOINT, 'confirmed');
+    return activeConnection;
+  } catch (e) {
+    console.error('Failed to create fallback connection', e);
+  }
+  
+  throw new Error('Failed to establish connection to Solana network');
 };
 
-// Override the connection object with these utility methods
-export { connection };
-
-// Add a function to check if the connection is active
-export const checkConnection = async () => {
+// Refresh the connection with a different endpoint
+export const refreshConnection = async () => {
   try {
-    const version = await connection.getVersion();
-    console.log('Solana connection is active, version:', version);
-    return true;
+    console.log('Refreshing Solana connection...');
+    
+    // We'll just create a new connection instead of trying to be clever
+    // This ensures we get a fresh working connection
+    activeConnection = null;
+    return await getActiveConnection();
   } catch (error) {
-    console.error('Solana connection check failed:', error);
-    return false;
+    console.error('Failed to refresh connection:', error);
+    
+    // Even if refreshing fails, return the best connection we can
+    if (activeConnection) {
+      return activeConnection;
+    }
+    
+    // Last ditch effort - create a basic connection
+    try {
+      console.log('Creating emergency connection to default endpoint');
+      activeConnection = new Connection(DEFAULT_ENDPOINT, 'confirmed');
+      return activeConnection;
+    } catch (e) {
+      console.error('Failed to create emergency connection', e);
+      throw new Error('Unable to establish any Solana connection');
+    }
+  }
+};
+
+// Default connection - but don't initialize it immediately
+export const connection = null; // Will be lazily initialized when needed
+
+// Utility function to check token mint info for debugging
+export const checkTokenMintInfo = async (tokenMintAddress, walletPublicKey) => {
+  try {
+    console.log('Checking token mint info...');
+    
+    const conn = await getActiveConnection();
+    const mintPublicKey = new PublicKey(tokenMintAddress);
+    
+    // Get the mint info
+    const mintInfo = await conn.getAccountInfo(mintPublicKey);
+    
+    if (!mintInfo) {
+      console.error('Token mint not found on-chain!');
+      return {
+        exists: false,
+        error: 'Token mint not found'
+      };
+    }
+    
+    console.log('Token mint exists on chain:', {
+      address: tokenMintAddress,
+      owner: mintInfo.owner.toString(),
+      executable: mintInfo.executable,
+      lamports: mintInfo.lamports,
+      dataSize: mintInfo.data.length
+    });
+    
+    // Try to parse as a token mint
+    try {
+      const data = Buffer.from(mintInfo.data);
+      
+      // Basic parsing of mint data (this is a simplified version)
+      const mintAuthority = new PublicKey(data.slice(0, 32));
+      const supply = data.readBigUInt64LE(36);
+      const decimals = data[44];
+      
+      const isWalletMintAuthority = mintAuthority.equals(new PublicKey(walletPublicKey));
+      
+      console.log('Token mint details:', {
+        mintAuthority: mintAuthority.toString(),
+        supply: supply.toString(),
+        decimals,
+        isWalletMintAuthority
+      });
+      
+      return {
+        exists: true,
+        isWalletMintAuthority,
+        mintAuthority: mintAuthority.toString(),
+        supply: supply.toString(),
+        decimals
+      };
+    } catch (parseError) {
+      console.error('Error parsing mint data:', parseError);
+      return {
+        exists: true,
+        error: 'Failed to parse mint data'
+      };
+    }
+  } catch (error) {
+    console.error('Error checking token mint:', error);
+    return {
+      exists: false,
+      error: error.message
+    };
   }
 };
 

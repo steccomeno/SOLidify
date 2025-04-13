@@ -11,7 +11,7 @@
     "initialize": "node src/scripts/initialize.js",
     "create-cdp": "node src/scripts/create_cdp.js",
     "create-proposal": "node src/scripts/create_proposal.js",
-    "start": "webpack serve --mode development",
+    "start": "BROWSER='google chrome' webpack serve --mode development",
     "eject": "webpack --mode development --config webpack.config.js"
   },
   "keywords": [
@@ -30,9 +30,9 @@
     "@solana/wallet-adapter-phantom": "^0.9.24",
     "@solana/wallet-adapter-react": "^0.15.35",
     "@solana/wallet-adapter-react-ui": "^0.9.35",
+    "@solana/wallet-adapter-wallets": "^0.19.32",
     "@solana/web3.js": "^1.98.0",
     "bn.js": "^5.2.1",
-    "browserify-zlib": "^0.2.0",
     "framer-motion": "^10.16.4",
     "path-browserify": "^1.0.1",
     "react": "^18.2.0",
@@ -54,6 +54,7 @@
     "@types/mocha": "^10.0.1",
     "assert": "^2.1.0",
     "babel-loader": "^9.1.3",
+    "browserify-zlib": "^0.2.0",
     "bs58": "^6.0.0",
     "buffer": "^6.0.3",
     "chai": "^4.3.7",
@@ -74,9 +75,13 @@
     "ts-node": "^10.9.2",
     "typescript": "^4.9.5",
     "url": "^0.11.4",
+    "vm-browserify": "^1.1.2",
     "webpack": "^5.89.0",
     "webpack-cli": "^5.1.4",
     "webpack-dev-server": "^4.15.1"
+  },
+  "engines": {
+    "node": ">=18.0.0"
   },
   "resolutions": {
     "nth-check": "^2.1.1",
