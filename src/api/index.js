@@ -808,9 +808,19 @@ async function initWalletApi() {
     // First verify wallet connections
     await verifyWalletConnection();
 
-    // Now set up the API with the wallet
+    // Now set up the API with a safely wrapped wallet
     const wallet = getWallet();
-    solanaApi.wallet = wallet;
+    
+    if (!wallet) {
+        console.warn("No wallet available for API initialization");
+        return false;
+    }
+    
+    // Create a safe wrapper around the wallet
+    const safeWallet = createSafeWalletWrapper(wallet);
+    
+    // Use the safe wrapper for the API
+    solanaApi.wallet = safeWallet;
     
     // Try to set the SAI mint to a stored value if it exists
     const storedSaiMint = localStorage.getItem('sai_token_mint');
@@ -828,7 +838,7 @@ async function initWalletApi() {
     
     if (initialized) {
         console.log("Wallet API initialized successfully");
-        isInitialized = true;
+        isFastMode = true;
         
         try {
             // Get token accounts and balances
@@ -847,7 +857,7 @@ async function initWalletApi() {
 // Initialize the API
 export const init = async (wallet = null) => {
     try {
-        if (isInitialized && wallet === null) {
+        if (isAPIInitialized() && wallet === null) {
             console.log('API already initialized');
             return true;
         }
@@ -858,7 +868,7 @@ export const init = async (wallet = null) => {
         if (success) {
             // Try to auto-create token account if needed
             try {
-                await solanaApi.ensureSaiTokenAccount();
+                await solanaAPI.ensureSaiTokenAccount();
             } catch (e) {
                 console.warn('Failed to ensure SAI token account:', e);
             }
@@ -869,4 +879,119 @@ export const init = async (wallet = null) => {
         console.error('API initialization error:', error);
         return false;
     }
-}; 
+};
+
+// Add utility function to create a more reliable wallet wrapper
+function createSafeWalletWrapper(wallet) {
+    // Return a proxy-like object that safely wraps the wallet
+    return {
+        publicKey: wallet.publicKey,
+        
+        // Safe signing implementation that avoids using this.emit
+        signTransaction: async (transaction) => {
+            console.log("Using safe signTransaction wrapper");
+            
+            // First try direct wallet object if Solflare is present
+            if (window.solflare && window.solflare.isConnected) {
+                try {
+                    console.log("Using Solflare window object for signing");
+                    return await window.solflare.signTransaction(transaction);
+                } catch (err) {
+                    console.error("Solflare window signing failed:", err);
+                }
+            }
+            
+            // Try Phantom if available
+            if (window.solana && window.solana.isConnected) {
+                try {
+                    console.log("Using Phantom window object for signing");
+                    return await window.solana.signTransaction(transaction);
+                } catch (err) {
+                    console.error("Phantom window signing failed:", err);
+                }
+            }
+            
+            // Last resort: use wallet adapter's method directly but with safe call
+            console.log("Using direct function call for signing");
+            const walletSignMethod = wallet.signTransaction;
+            
+            return new Promise((resolve, reject) => {
+                try {
+                    const result = walletSignMethod(transaction);
+                    if (result instanceof Promise) {
+                        result.then(resolve).catch(reject);
+                    } else {
+                        resolve(result);
+                    }
+                } catch (err) {
+                    reject(err);
+                }
+            });
+        },
+        
+        // Basic methods needed for wallet adapter
+        connect: async () => {
+            console.log("Using safe connect wrapper");
+            if (wallet.connect) {
+                return wallet.connect();
+            }
+        },
+        
+        disconnect: async () => {
+            console.log("Using safe disconnect wrapper");
+            if (wallet.disconnect) {
+                return wallet.disconnect();
+            }
+        },
+        
+        // Pass through any other needed methods
+        signAllTransactions: wallet.signAllTransactions,
+        signMessage: wallet.signMessage
+    };
+}
+
+// Update the existing getWallet function to use our wrapper
+function getWallet() {
+    // Check for Solflare first
+    if (window.solflare && window.solflare.isConnected) {
+        console.log("Using Solflare wallet");
+        return createSafeWalletWrapper({
+            publicKey: window.solflare.publicKey,
+            signTransaction: window.solflare.signTransaction.bind(window.solflare),
+            signAllTransactions: window.solflare.signAllTransactions?.bind(window.solflare),
+            signMessage: window.solflare.signMessage?.bind(window.solflare),
+            connect: window.solflare.connect?.bind(window.solflare),
+            disconnect: window.solflare.disconnect?.bind(window.solflare)
+        });
+    }
+    
+    // Then check for Phantom
+    if (window.solana && window.solana.isConnected) {
+        console.log("Using Phantom wallet");
+        return createSafeWalletWrapper({
+            publicKey: window.solana.publicKey,
+            signTransaction: window.solana.signTransaction.bind(window.solana),
+            signAllTransactions: window.solana.signAllTransactions?.bind(window.solana),
+            signMessage: window.solana.signMessage?.bind(window.solana),
+            connect: window.solana.connect?.bind(window.solana),
+            disconnect: window.solana.disconnect?.bind(window.solana)
+        });
+    }
+    
+    // Fall back to injected wallet
+    console.log("No direct wallet found, looking for injected wallet");
+    if (window.ethereum && window.ethereum.isSolana) {
+        console.log("Using injected Solana wallet");
+        return createSafeWalletWrapper({
+            publicKey: window.ethereum.publicKey,
+            signTransaction: window.ethereum.signTransaction?.bind(window.ethereum),
+            signAllTransactions: window.ethereum.signAllTransactions?.bind(window.ethereum),
+            signMessage: window.ethereum.signMessage?.bind(window.ethereum),
+            connect: window.ethereum.connect?.bind(window.ethereum),
+            disconnect: window.ethereum.disconnect?.bind(window.ethereum)
+        });
+    }
+    
+    console.warn("No wallet found");
+    return null;
+} 

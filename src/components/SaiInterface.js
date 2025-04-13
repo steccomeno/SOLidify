@@ -257,8 +257,31 @@ const SaiInterface = () => {
         e.preventDefault();
         
         if (!connected || !publicKey) {
-            setError("Please connect your wallet first");
-            return;
+            // Try to connect to wallet if available
+            if (window.solflare) {
+                try {
+                    console.log("Attempting to connect to Solflare wallet first");
+                    await window.solflare.connect();
+                    console.log("Connected to Solflare wallet");
+                } catch (err) {
+                    console.error("Failed to connect to Solflare wallet:", err);
+                    setError("Please connect your wallet manually and try again");
+                    return;
+                }
+            } else if (window.solana) {
+                try {
+                    console.log("Attempting to connect to Phantom wallet first");
+                    await window.solana.connect();
+                    console.log("Connected to Phantom wallet");
+                } catch (err) {
+                    console.error("Failed to connect to Phantom wallet:", err);
+                    setError("Please connect your wallet manually and try again");
+                    return;
+                }
+            } else {
+                setError("Please connect your wallet first");
+                return;
+            }
         }
         
         try {
@@ -266,6 +289,12 @@ const SaiInterface = () => {
             setError(null);
             setTransactionSuccess(false);
             setTokenInfo(null); // Reset token info
+            
+            // Ensure API is initialized
+            if (!isAPIInitialized()) {
+                console.log("API not initialized, initializing now");
+                await initializeAPI(wallet);
+            }
             
             const solAmount = parseFloat(vaultForm.solAmount);
             const saiAmount = parseFloat(vaultForm.saiAmount);
@@ -279,7 +308,29 @@ const SaiInterface = () => {
             }
 
             console.log(`Creating vault with ${solAmount} SOL for ${saiAmount} SAI`);
-            const result = await createCDP(solAmount, saiAmount);
+            
+            // Simple retry mechanism
+            let attempts = 0;
+            const maxAttempts = 3;
+            let result = null;
+            
+            while (attempts < maxAttempts) {
+                try {
+                    console.log(`Attempt ${attempts + 1} to create CDP`);
+                    result = await createCDP(solAmount, saiAmount);
+                    break; // If successful, break the loop
+                } catch (err) {
+                    console.error(`Attempt ${attempts + 1} failed:`, err);
+                    attempts++;
+                    
+                    if (attempts >= maxAttempts) {
+                        throw err;
+                    }
+                    
+                    // Wait before retry
+                    await new Promise(resolve => setTimeout(resolve, 1000 * attempts));
+                }
+            }
             
             if (!result || !result.success) {
                 throw new Error(result?.error || "Failed to create vault");
@@ -303,7 +354,7 @@ const SaiInterface = () => {
                 // Create new vault object
                 const newVault = {
                     id: uniqueId,
-                    address: result.vault,
+                    address: result.vault || result.vaultAddress,
                     tokenMint: result.tokenMint,
                     collateral: solAmount,
                     minted: saiAmount,
@@ -329,6 +380,21 @@ const SaiInterface = () => {
         } catch (err) {
             console.error("Error creating vault:", err);
             setError("Failed to create vault: " + err.message);
+            
+            // Try to automatically reconnect wallet on failure
+            if (err.message && (err.message.includes("wallet") || err.message.includes("signing"))) {
+                console.log("Wallet-related error detected, attempting to reconnect");
+                if (window.solflare) {
+                    try {
+                        await window.solflare.disconnect();
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                        await window.solflare.connect();
+                        setError("Wallet reconnected. Please try again.");
+                    } catch (reconnectErr) {
+                        console.error("Failed to reconnect wallet:", reconnectErr);
+                    }
+                }
+            }
         } finally {
             setCreatingVault(false);
         }

@@ -515,99 +515,85 @@ export class SolanaAPI {
 
     // Create a reliable signing method that works with different wallet types
     async signTransaction(transaction) {
-        console.log("Using enhanced transaction signing method");
+        console.log("Using direct wallet signing method with no adapter dependency");
         
+        // Use a try/catch block to handle errors
         try {
-            // Try each method in sequence and return the first one that works
-            
-            // Method 1: Direct Solflare access through window object
-            if (window.solflare && window.solflare.isConnected) {
-                console.log("Attempting direct Solflare signing via window.solflare");
+            // Method 1: Use Solflare's direct API if available
+            if (window.solflare && typeof window.solflare.signTransaction === 'function') {
                 try {
-                    const signedTx = await window.solflare.signTransaction(transaction);
-                    console.log("Direct Solflare signing successful");
-                    return signedTx;
+                    console.log("Using Solflare window object directly");
+                    
+                    // Make sure wallet is connected
+                    if (!window.solflare.isConnected) {
+                        console.log("Solflare not connected, attempting to connect");
+                        await window.solflare.connect();
+                    }
+                    
+                    // Use direct method with no this context
+                    const signed = await window.solflare.signTransaction(transaction);
+                    console.log("Solflare direct signing successful");
+                    return signed;
                 } catch (err) {
-                    console.warn("Direct Solflare signing failed:", err.message);
+                    console.error("Error with Solflare direct signing:", err);
                 }
             }
             
-            // Method 2: Direct Phantom access
-            if (window.solana && window.solana.isConnected) {
-                console.log("Attempting direct Phantom signing via window.solana");
+            // Method 2: Use Phantom's direct API if available
+            if (window.solana && typeof window.solana.signTransaction === 'function') {
                 try {
-                    const signedTx = await window.solana.signTransaction(transaction);
-                    console.log("Direct Phantom signing successful");
-                    return signedTx;
+                    console.log("Using Phantom window object directly");
+                    
+                    // Make sure wallet is connected
+                    if (!window.solana.isConnected) {
+                        console.log("Phantom not connected, attempting to connect");
+                        await window.solana.connect();
+                    }
+                    
+                    // Use direct method with no this context
+                    const signed = await window.solana.signTransaction(transaction);
+                    console.log("Phantom direct signing successful");
+                    return signed;
                 } catch (err) {
-                    console.warn("Direct Phantom signing failed:", err.message);
+                    console.error("Error with Phantom direct signing:", err);
                 }
             }
             
-            // Method 3: Direct wallet adapter approach with JS execution
+            // Last resort: Try with adapter but no emit dependency
             if (this.wallet && typeof this.wallet.signTransaction === 'function') {
-                console.log("Attempting direct wallet adapter signing with JS execution");
-                
-                // Create a new function identical to the wallet's signTransaction
-                // but without relying on "this" context or emit
-                const directSignFn = new Function(
-                    'transaction',
-                    'wallet',
-                    `
-                    return new Promise((resolve, reject) => {
+                try {
+                    console.log("Attempting bare function call with no context dependency");
+                    
+                    // Get just the function itself
+                    const signFn = this.wallet.signTransaction;
+                    
+                    // Create a minimal wrapper with no dependency on emit
+                    const result = await new Promise((resolve, reject) => {
                         try {
-                            const originalSignFn = wallet.signTransaction;
-                            // Using direct function execution to avoid 'this' context issues
-                            const result = originalSignFn(transaction);
-                            if (result && result.then) {
-                                result.then(resolve).catch(reject);
+                            // Call directly with transaction as the only argument
+                            const direct = signFn(transaction);
+                            if (direct instanceof Promise) {
+                                direct.then(resolve).catch(reject);
                             } else {
-                                resolve(result);
+                                resolve(direct);
                             }
-                        } catch (err) {
-                            reject(err);
+                        } catch (e) {
+                            reject(e);
                         }
                     });
-                    `
-                );
-                
-                try {
-                    // Execute our direct function
-                    return await directSignFn(transaction, this.wallet);
+                    
+                    console.log("Direct function call successful");
+                    return result;
                 } catch (err) {
-                    console.warn("Direct JS execution signing failed:", err.message);
+                    console.error("Error with direct function call:", err);
                 }
             }
             
-            // Method 4: Last attempt - try with a fallback manual proxy
-            console.log("Attempting signing with fallback manual proxy");
-            try {
-                const wallet = this.wallet;
-                const signFn = wallet.signTransaction;
-                
-                // Create a proxy method that doesn't rely on this.emit
-                const signedTx = await new Promise((resolve, reject) => {
-                    try {
-                        // Directly call the function with transaction as argument
-                        const result = signFn.apply(wallet, [transaction]);
-                        if (result instanceof Promise) {
-                            result.then(resolve).catch(reject);
-                        } else {
-                            resolve(result);
-                        }
-                    } catch (err) {
-                        reject(err);
-                    }
-                });
-                
-                return signedTx;
-            } catch (err) {
-                console.error("All signing methods failed:", err);
-                throw new Error(`Transaction signing failed: ${err.message}. Please reconnect your wallet and try again.`);
-            }
+            // If we get here, all methods failed
+            throw new Error("All signing methods failed. Please reconnect your wallet and try again.");
         } catch (error) {
-            console.error("Wallet signing critical failure:", error);
-            throw new Error(`Critical transaction signing error: ${error.message}. Please reconnect your wallet and try again.`);
+            console.error("Transaction signing critical failure:", error);
+            throw error;
         }
     }
 
@@ -662,8 +648,6 @@ export class SolanaAPI {
                 publicKey: this.wallet.publicKey.toString()
             });
             
-            console.log("Creating a new test token mint for this demo");
-            
             // Convert to raw values
             const lamports = collateralAmount * LAMPORTS_PER_SOL;
             const saiRaw = new BN(saiAmount * Math.pow(10, SAI_DECIMALS));
@@ -684,200 +668,278 @@ export class SolanaAPI {
             console.log("Created demo vault account:", vaultKeypair.publicKey.toString());
             
             try {
-                // Create the token mint for this demo
-                const tokenMint = Keypair.generate();
-                this.saiMint = tokenMint.publicKey;
-                console.log("Created new SAI token mint:", this.saiMint.toString());
+                // Check if we already have a saved SAI token mint
+                let tokenMint;
+                let tokenMintKeypair;
+                let createMintTx;
+                let needsToCreateMint = false;
                 
-                // Split the process into multiple transactions to simplify signing
-
-                // TRANSACTION 1: Create the token mint
-                const createMintTx = new Transaction();
-                createMintTx.add(
-                    ComputeBudgetProgram.setComputeUnitLimit({
-                        units: 400000
-                    })
-                );
+                // Try to retrieve existing token mint from localStorage
+                const existingSaiMint = localStorage.getItem('sai_token_mint');
                 
-                // Calculate rent for mint account
-                const mintRent = await this.connection.getMinimumBalanceForRentExemption(82);
-                
-                // Add instruction to create account for the mint
-                createMintTx.add(
-                    SystemProgram.createAccount({
-                        fromPubkey: this.wallet.publicKey,
-                        newAccountPubkey: tokenMint.publicKey,
-                        lamports: mintRent,
-                        space: 82,
-                        programId: TOKEN_PROGRAM_ID
-                    }),
-                    createInitializeMintInstruction(
-                        tokenMint.publicKey,
-                        SAI_DECIMALS,
-                        this.wallet.publicKey,
-                        null
-                    )
-                );
-                
-                // Get recent blockhash
-                const { blockhash: mintBlockhash } = await this.connection.getLatestBlockhash('confirmed');
-                createMintTx.recentBlockhash = mintBlockhash;
-                createMintTx.feePayer = this.wallet.publicKey;
-                
-                // Sign with token mint keypair first
-                createMintTx.partialSign(tokenMint);
-                
-                console.log("Transaction 1 prepared, signing with wallet");
-                
-                // Sign with wallet using our enhanced signing method
-                let signedMintTx;
-                try {
-                    signedMintTx = await this.signTransaction(createMintTx);
-                    console.log("Transaction 1 signed successfully");
-                } catch (signError) {
-                    console.error("Error signing mint transaction:", signError);
-                    throw new Error(`Failed to sign mint transaction: ${signError.message}`);
+                if (existingSaiMint) {
+                    try {
+                        // Use existing token mint
+                        console.log("Using existing SAI token mint:", existingSaiMint);
+                        tokenMint = new PublicKey(existingSaiMint);
+                        this.saiMint = tokenMint;
+                        
+                        // Verify the mint exists on-chain
+                        const mintInfo = await this.connection.getAccountInfo(tokenMint);
+                        if (!mintInfo) {
+                            console.warn("Saved token mint not found on chain, will create a new one");
+                            needsToCreateMint = true;
+                        } else {
+                            console.log("Verified existing token mint is valid");
+                        }
+                    } catch (err) {
+                        console.error("Error using saved token mint:", err);
+                        needsToCreateMint = true;
+                    }
+                } else {
+                    console.log("No existing SAI token mint found, will create a new one");
+                    needsToCreateMint = true;
                 }
                 
-                // Send mint transaction
-                console.log("Sending mint creation transaction");
-                const mintTxId = await this.connection.sendRawTransaction(
-                    signedMintTx.serialize(),
-                    { skipPreflight: true }
-                );
+                // Create a new token mint if needed
+                if (needsToCreateMint) {
+                    console.log("Creating new SAI token mint");
+                    tokenMintKeypair = Keypair.generate();
+                    tokenMint = tokenMintKeypair.publicKey;
+                    this.saiMint = tokenMint;
+                    
+                    // Save the token mint to localStorage for future use
+                    localStorage.setItem('sai_token_mint', tokenMint.toString());
+                    
+                    // Add to user tokens list for tracking
+                    try {
+                        const userTokens = JSON.parse(localStorage.getItem('user_tokens') || '[]');
+                        if (!userTokens.includes(tokenMint.toString())) {
+                            userTokens.push(tokenMint.toString());
+                            localStorage.setItem('user_tokens', JSON.stringify(userTokens));
+                        }
+                    } catch (err) {
+                        console.error("Error updating user tokens:", err);
+                    }
+                    
+                    // TRANSACTION 1: Create the token mint
+                    createMintTx = new Transaction();
+                    createMintTx.add(
+                        ComputeBudgetProgram.setComputeUnitLimit({
+                            units: 400000
+                        })
+                    );
+                    
+                    // Calculate rent for mint account
+                    const mintRent = await this.connection.getMinimumBalanceForRentExemption(82);
+                    
+                    // Add instruction to create account for the mint
+                    createMintTx.add(
+                        SystemProgram.createAccount({
+                            fromPubkey: this.wallet.publicKey,
+                            newAccountPubkey: tokenMint,
+                            lamports: mintRent,
+                            space: 82,
+                            programId: TOKEN_PROGRAM_ID
+                        }),
+                        createInitializeMintInstruction(
+                            tokenMint,
+                            SAI_DECIMALS,
+                            this.wallet.publicKey,
+                            null
+                        )
+                    );
+                    
+                    // Get recent blockhash
+                    const { blockhash: mintBlockhash } = await this.connection.getLatestBlockhash('confirmed');
+                    createMintTx.recentBlockhash = mintBlockhash;
+                    createMintTx.feePayer = this.wallet.publicKey;
+                    
+                    // Sign with token mint keypair first
+                    createMintTx.partialSign(tokenMintKeypair);
+                    
+                    console.log("Transaction 1 prepared, signing with wallet");
+                    
+                    // Sign with wallet using our enhanced signing method
+                    let signedMintTx;
+                    try {
+                        signedMintTx = await this.signTransaction(createMintTx);
+                        console.log("Transaction 1 signed successfully");
+                    } catch (signError) {
+                        console.error("Error signing mint transaction:", signError);
+                        throw new Error(`Failed to sign mint transaction: ${signError.message}`);
+                    }
+                    
+                    // Send the transaction
+                    console.log("Sending mint creation transaction...");
+                    const mintSignature = await this.connection.sendRawTransaction(
+                        signedMintTx.serialize(),
+                        { skipPreflight: true }
+                    );
+                    
+                    // Confirm the transaction
+                    console.log("Mint transaction sent:", mintSignature);
+                    try {
+                        await this.connection.confirmTransaction(mintSignature, 'confirmed');
+                        console.log("Mint transaction confirmed!");
+                    } catch (err) {
+                        console.error("Error confirming mint transaction:", err);
+                        throw new Error(`Failed to create token mint: ${err.message}`);
+                    }
+                }
                 
-                console.log("Mint transaction sent:", mintTxId);
+                // Check if we need to create a token account for the user
+                console.log("Checking if user has a token account for SAI...");
                 
-                // Wait for confirmation
-                await this.connection.confirmTransaction(mintTxId, 'confirmed');
-                console.log("Mint transaction confirmed");
-                
-                // TRANSACTION 2: Create token account and mint tokens
-                
-                // Get the token account for the user
                 const userTokenAccount = await getAssociatedTokenAddress(
-                    tokenMint.publicKey,
+                    tokenMint,
                     this.wallet.publicKey
                 );
-                console.log("User token account for SAI tokens:", userTokenAccount.toString());
                 
-                const mintTokensTx = new Transaction();
-                mintTokensTx.add(
-                    ComputeBudgetProgram.setComputeUnitLimit({
-                        units: 400000
-                    })
-                );
-                
-                // Add instruction to create associated token account
-                mintTokensTx.add(
-                    createAssociatedTokenAccountInstruction(
-                        this.wallet.publicKey,
-                        userTokenAccount,
-                        this.wallet.publicKey,
-                        tokenMint.publicKey
-                    )
-                );
-                
-                // Add instruction to mint tokens
-                mintTokensTx.add(
-                    createMintToInstruction(
-                        tokenMint.publicKey,
-                        userTokenAccount,
-                        this.wallet.publicKey,
-                        saiRaw.toNumber()
-                    )
-                );
-                
-                // Add instruction to create a vault account with collateral
-                const vaultRent = await this.connection.getMinimumBalanceForRentExemption(0);
-                const collateralLamports = Math.floor(collateralAmount * LAMPORTS_PER_SOL);
-                
-                // Create vault account and transfer SOL to it
-                mintTokensTx.add(
-                    SystemProgram.createAccount({
-                        fromPubkey: this.wallet.publicKey,
-                        newAccountPubkey: vaultKeypair.publicKey,
-                        lamports: vaultRent + collateralLamports, // Include the collateral amount
-                        space: 0,
-                        programId: SystemProgram.programId
-                    })
-                );
-                
-                // Get recent blockhash
-                const { blockhash: tokenBlockhash } = await this.connection.getLatestBlockhash('confirmed');
-                mintTokensTx.recentBlockhash = tokenBlockhash;
-                mintTokensTx.feePayer = this.wallet.publicKey;
-                
-                // Sign with vault keypair for SystemProgram.createAccount
-                mintTokensTx.partialSign(vaultKeypair);
-                
-                console.log("Transaction 2 prepared, signing with wallet");
-                
-                // Sign with wallet using our enhanced signing method
-                let signedTokenTx;
+                // Check if the token account exists
+                let tokenAccountInfo;
                 try {
-                    signedTokenTx = await this.signTransaction(mintTokensTx);
-                    console.log("Transaction 2 signed successfully");
-                } catch (signError) {
-                    console.error("Error signing token transaction:", signError);
-                    throw new Error(`Failed to sign token transaction: ${signError.message}`);
+                    tokenAccountInfo = await this.connection.getAccountInfo(userTokenAccount);
+                } catch (err) {
+                    console.error("Error checking token account:", err);
                 }
                 
-                // Send token transaction
-                console.log("Sending token transaction");
-                const tokenTxId = await this.connection.sendRawTransaction(
-                    signedTokenTx.serialize(),
-                    { skipPreflight: true }
+                // Create token account first if needed
+                if (!tokenAccountInfo) {
+                    console.log("Token account doesn't exist. Creating it first.");
+                    
+                    // Create a simple transaction with just token account creation
+                    const createAccountTx = new Transaction();
+                    createAccountTx.add(
+                        ComputeBudgetProgram.setComputeUnitLimit({
+                            units: 200000
+                        })
+                    );
+                    
+                    createAccountTx.add(
+                        createAssociatedTokenAccountInstruction(
+                            this.wallet.publicKey,
+                            userTokenAccount,
+                            this.wallet.publicKey,
+                            tokenMint
+                        )
+                    );
+                    
+                    // Get blockhash
+                    const { blockhash: accountBlockhash } = await this.connection.getLatestBlockhash('confirmed');
+                    createAccountTx.recentBlockhash = accountBlockhash;
+                    createAccountTx.feePayer = this.wallet.publicKey;
+                    
+                    // Sign and send the token account creation transaction
+                    try {
+                        const signedAccountTx = await this.signTransaction(createAccountTx);
+                        
+                        const accountSignature = await this.connection.sendRawTransaction(
+                            signedAccountTx.serialize(),
+                            { skipPreflight: true }
+                        );
+                        
+                        console.log("Token account creation transaction sent:", accountSignature);
+                        await this.connection.confirmTransaction(accountSignature, 'confirmed');
+                        console.log("Token account created successfully");
+                    } catch (err) {
+                        console.error("Error creating token account:", err);
+                        throw new Error(`Failed to create token account: ${err.message}`);
+                    }
+                }
+                
+                // Now create a simple mint transaction with reduced instructions
+                console.log("Creating transaction to mint", saiAmount, "SAI tokens to user");
+                
+                // Use a fresh connection
+                await this.ensureConnection();
+                
+                // Get a fresh blockhash
+                const { blockhash: mintBlockhash } = await this.connection.getLatestBlockhash('confirmed');
+                
+                // Create a simple mint transaction
+                const mintTx = new Transaction();
+                mintTx.recentBlockhash = mintBlockhash;
+                mintTx.feePayer = this.wallet.publicKey;
+                
+                // Include the compute budget instruction
+                mintTx.add(
+                    ComputeBudgetProgram.setComputeUnitLimit({
+                        units: 200000
+                    })
                 );
                 
-                console.log("Token transaction sent:", tokenTxId);
+                // Add mint instruction only
+                mintTx.add(
+                    createMintToInstruction(
+                        tokenMint,
+                        userTokenAccount,
+                        this.wallet.publicKey,
+                        saiRaw,
+                        []
+                    )
+                );
                 
-                // Wait for confirmation
-                await this.connection.confirmTransaction(tokenTxId, 'confirmed');
-                console.log("Token transaction confirmed");
+                // Sign and send transaction
+                try {
+                    console.log("Signing mint transaction with wallet");
+                    const signedMintTx = await this.signTransaction(mintTx);
+                    console.log("Mint transaction signed successfully");
+                    
+                    console.log("Sending mint transaction");
+                    const mintSignature = await this.connection.sendRawTransaction(
+                        signedMintTx.serialize(),
+                        { skipPreflight: true }
+                    );
+                    
+                    console.log("Mint transaction sent:", mintSignature);
+                    await this.connection.confirmTransaction(mintSignature, 'confirmed');
+                    console.log("Mint transaction confirmed successfully");
+                } catch (err) {
+                    console.error("Error with mint transaction:", err);
+                    throw new Error(`Failed to mint SAI tokens: ${err.message}`);
+                }
                 
-                // Save token mint address to localStorage for balance tracking
-                const existingTokens = JSON.parse(localStorage.getItem('user_tokens') || '[]');
-                if (!existingTokens.includes(tokenMint.publicKey.toString())) {
-                    existingTokens.push(tokenMint.publicKey.toString());
-                    localStorage.setItem('user_tokens', JSON.stringify(existingTokens));
-                    console.log('Saved token mint to localStorage:', tokenMint.publicKey.toString());
+                // Save the mint address to localStorage
+                localStorage.setItem('sai_token_mint', tokenMint.toString());
+                
+                // Save the vault to local storage along with its token mint
+                try {
+                    const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
+                    vaults.push({
+                        vaultAddress: vaultKeypair.publicKey.toString(),
+                        tokenMint: tokenMint.toString(),
+                        collateral: collateralAmount,
+                        debt: saiAmount,
+                        created: new Date().toISOString()
+                    });
+                    localStorage.setItem('vaults', JSON.stringify(vaults));
+                    console.log('Saved vault to localStorage:', vaultKeypair.publicKey.toString());
+                } catch (error) {
+                    console.error('Error saving vault to localStorage:', error);
                 }
                 
                 // Update cached balances
-                try {
-                    const tokenAccount = await getAccount(this.connection, userTokenAccount);
-                    const saiBalance = Number(tokenAccount.amount) / Math.pow(10, SAI_DECIMALS);
-                    
-                    this._cachedBalances = {
-                        sol: await this.connection.getBalance(this.wallet.publicKey) / LAMPORTS_PER_SOL,
-                        sai: saiBalance
-                    };
-                } catch (err) {
-                    console.error('Error updating cached balances:', err);
-                }
-                
-                // Refresh balances to show newly minted tokens
                 await this.refreshBalances();
                 
+                console.log("Vault created successfully!");
                 return {
                     success: true,
-                    signature: tokenTxId,
-                    tokenMint: this.saiMint.toString(),
-                    tokenAccount: userTokenAccount.toString(),
-                    vault: vaultKeypair.publicKey.toString(),
-                    message: `Successfully created vault and minted ${saiAmount} SAI tokens. To see these tokens in Phantom, add the custom token: ${this.saiMint.toString()}`
+                    vaultAddress: vaultKeypair.publicKey.toString(),
+                    tokenMint: tokenMint.toString()
                 };
-                
-            } catch (setupError) {
-                console.error('Error in CDP setup:', setupError);
-                throw setupError;
+            } catch (error) {
+                console.error("Error creating CDP:", error);
+                return {
+                    success: false,
+                    error: error.message || 'Failed to create CDP'
+                };
             }
         } catch (error) {
-            console.error('Error creating CDP:', error);
+            console.error("Critical error in createCDP:", error);
             return {
                 success: false,
-                error: error.message || 'Failed to create CDP'
+                error: error.message || 'An unexpected error occurred'
             };
         }
     }
@@ -1097,6 +1159,18 @@ export class SolanaAPI {
             
             // Force a fresh balance check by bypassing rate limits
             lastBalanceCheck = 0;
+            
+            // Check if we have a stored SAI mint in localStorage
+            const storedSaiMint = localStorage.getItem('sai_token_mint');
+            if (storedSaiMint) {
+                try {
+                    // Set this as our primary SAI mint if not already set
+                    this.saiMint = new PublicKey(storedSaiMint);
+                    console.log('Using stored SAI mint for balances:', this.saiMint.toString());
+                } catch (e) {
+                    console.error('Error setting stored SAI mint:', e);
+                }
+            }
             
             // Get fresh balances
             const balances = await this.getTokenBalances();
