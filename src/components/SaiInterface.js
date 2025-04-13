@@ -523,6 +523,88 @@ const SaiInterface = () => {
         }
     };
 
+    // Add TokenInstructions component to show how to add tokens to wallet
+    const TokenInstructions = ({ tokenMint }) => {
+        return (
+            <div className="token-instructions alert alert-success">
+                <h4>Transaction successful! Your vault has been created.</h4>
+                
+                <p>To see your tokens in your wallet:</p>
+                <ol>
+                    <li>Open your wallet (Solflare or Phantom)</li>
+                    <li>Go to "Tokens" tab</li>
+                    <li>Click "Add Custom Token" or similar</li>
+                    <li>Paste this address: <code>{tokenMint}</code></li>
+                    <li>Set token details if needed:</li>
+                    <ul>
+                        <li>Name: SAI</li>
+                        <li>Symbol: SAI</li>
+                        <li>Decimals: 9</li>
+                    </ul>
+                </ol>
+                
+                <div className="alert alert-info">
+                    <p><strong>Note:</strong> Devnet tokens may not show up in wallets automatically. 
+                    If you can't add the token, you can still use it through this application.</p>
+                    <p>Your token has been minted successfully, even if it doesn't appear in your wallet interface.</p>
+                </div>
+                
+                <button className="btn btn-sm btn-secondary" onClick={() => {
+                    if (navigator && navigator.clipboard) {
+                        navigator.clipboard.writeText(tokenMint);
+                        alert('Token address copied to clipboard!');
+                    }
+                }}>Copy Token Address</button>
+            </div>
+        );
+    };
+
+    // Add a function to retrieve token info from localStorage
+    const getTokenInfo = () => {
+        try {
+            // First try to get from tokenInfo state if it exists
+            if (tokenInfo && tokenInfo.mint) {
+                return {
+                    address: tokenInfo.mint,
+                    name: "SAI",
+                    symbol: "SAI",
+                    decimals: 9
+                };
+            }
+            
+            // Fallback to localStorage
+            const storedMint = localStorage.getItem('sai_token_mint');
+            const storedInfo = localStorage.getItem('sai_token_info');
+            
+            // First try using the detailed token info
+            if (storedInfo) {
+                try {
+                    return JSON.parse(storedInfo);
+                } catch (e) {
+                    console.error("Error parsing stored token info:", e);
+                }
+            }
+            
+            // Fallback to just the mint address
+            if (storedMint) {
+                return {
+                    address: storedMint,
+                    name: "SAI",
+                    symbol: "SAI",
+                    decimals: 9
+                };
+            }
+            
+            return null;
+        } catch (e) {
+            console.error("Error getting token info:", e);
+            return null;
+        }
+    };
+    
+    // Retrieve token info for display
+    const currentTokenInfo = getTokenInfo();
+
     // Wallet connection UI
     if (!connected) {
         return (
@@ -559,17 +641,7 @@ const SaiInterface = () => {
                     <div>
                         <p>Transaction successful! Your vault has been created.</p>
                         {tokenInfo && (
-                            <div className="token-info">
-                                <p>To see your tokens in Phantom wallet:</p>
-                                <ol>
-                                    <li>Open Phantom wallet</li>
-                                    <li>Click "Tokens"</li>
-                                    <li>Click "Manage token list" (+ icon)</li>
-                                    <li>Select "Custom token"</li>
-                                    <li>Paste this token address: <code>{tokenInfo.mint}</code></li>
-                                </ol>
-                                <p>You've minted {tokenInfo.amount} tokens!</p>
-                            </div>
+                            <TokenInstructions tokenMint={tokenInfo.mint} />
                         )}
                     </div>
                     <button onClick={() => {
@@ -596,22 +668,18 @@ const SaiInterface = () => {
                 <div className="interface-content">
                     <div className="balances">
                         <h2>Your Balances</h2>
-                        <p>SOL: {balances.sol}</p>
-                        <p>SAI: {balances.sai}</p>
+                        <div>SOL: {balances.sol.toFixed(8)}</div>
+                        <div>SAI: {balances.sai}</div>
+                        {currentTokenInfo && (
+                            <div className="token-info-display mt-2">
+                                <small className="text-muted">Token address: {currentTokenInfo.address}</small>
+                            </div>
+                        )}
                         <button 
-                            onClick={async () => {
-                                try {
-                                    setLoading(true);
-                                    const newBalances = await getTokenBalances(publicKey);
-                                    setBalances(newBalances);
-                                } catch (err) {
-                                    setError(err.message);
-                                } finally {
-                                    setLoading(false);
-                                }
-                            }} 
-                            disabled={loading || creatingVault}>
-                            Refresh Balances
+                            onClick={refreshBalances}
+                            disabled={refreshing}
+                        >
+                            {refreshing ? 'Refreshing...' : 'Refresh Balances'}
                         </button>
                     </div>
 

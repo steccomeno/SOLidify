@@ -159,6 +159,28 @@ function isCacheValid() {
     return cdpCache.data && (Date.now() - cdpCache.timestamp < cdpCache.ttl);
 }
 
+// Add helper function to update token metadata for better wallet visibility
+async function setupTokenMetadata(connection, tokenMint, name = "SAI", symbol = "SAI", ownerPubkey) {
+    try {
+        console.log(`Setting up token metadata for ${tokenMint.toString()}`);
+        
+        // Save token info to localStorage for easy reference
+        localStorage.setItem('sai_token_info', JSON.stringify({
+            address: tokenMint.toString(),
+            name: name,
+            symbol: symbol,
+            decimals: SAI_DECIMALS,
+            created: new Date().toISOString()
+        }));
+        
+        console.log(`Token metadata info saved to localStorage`);
+        return true;
+    } catch (error) {
+        console.error("Error setting token metadata:", error);
+        return false;
+    }
+}
+
 export class SolanaAPI {
     constructor() {
         this.initialized = false;
@@ -782,6 +804,15 @@ export class SolanaAPI {
                     try {
                         await this.connection.confirmTransaction(mintSignature, 'confirmed');
                         console.log("Mint transaction confirmed!");
+                        
+                        // Set up token metadata for better wallet visibility
+                        await setupTokenMetadata(
+                            this.connection,
+                            tokenMint,
+                            "SAI Stablecoin",
+                            "SAI",
+                            this.wallet.publicKey
+                        );
                     } catch (err) {
                         console.error("Error confirming mint transaction:", err);
                         throw new Error(`Failed to create token mint: ${err.message}`);

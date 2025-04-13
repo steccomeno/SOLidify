@@ -994,4 +994,36 @@ function getWallet() {
     
     console.warn("No wallet found");
     return null;
-} 
+}
+
+// Add function to get token info
+export const getSaiTokenInfo = () => {
+    try {
+        // Check if we have detailed token info in localStorage
+        const storedInfo = localStorage.getItem('sai_token_info');
+        if (storedInfo) {
+            try {
+                return JSON.parse(storedInfo);
+            } catch (e) {
+                console.error("Error parsing stored token info:", e);
+            }
+        }
+
+        // Fallback to just the mint address
+        const storedMint = localStorage.getItem('sai_token_mint');
+        if (storedMint) {
+            return {
+                address: storedMint,
+                name: "SAI Stablecoin",
+                symbol: "SAI",
+                decimals: 9,
+                created: new Date().toISOString()
+            };
+        }
+
+        return null;
+    } catch (e) {
+        console.error("Error getting token info:", e);
+        return null;
+    }
+}; 

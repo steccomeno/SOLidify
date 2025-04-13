@@ -1479,4 +1479,35 @@ h1 {
 .repay-button:disabled {
     background-color: #e0e0e0;
     cursor: not-allowed;
+}
+
+.token-instructions {
+  padding: 15px;
+  margin: 15px 0;
+  border-radius: 5px;
+}
+
+.token-instructions code {
+  background-color: rgba(0, 0, 0, 0.1);
+  padding: 2px 5px;
+  border-radius: 3px;
+  font-family: monospace;
+  user-select: all;
+}
+
+.token-instructions ol, .token-instructions ul {
+  margin-left: 1rem;
+  padding-left: 1rem;
+}
+
+.token-info-display {
+  margin-top: 10px;
+  padding: 5px;
+  font-size: 0.9em;
+  background-color: rgba(0, 0, 0, 0.05);
+  border-radius: 3px;
+}
+
+.token-info-display small {
+  word-break: break-all;
 } 
