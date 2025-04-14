@@ -22,6 +22,7 @@ import {
     closeVault
 } from '../api/index';
 import { SolanaAPI } from '../api/solana';
+import { getPythPrice } from '../utils/solanaUtils';
 import LiquidationRiskIndicator from './LiquidationRiskIndicator';
 import SaiTransfer from './SaiTransfer';
 import './SaiInterface.css';
@@ -149,6 +150,38 @@ const SaiInterface = () => {
             console.log("Balances loaded:", newBalances);
             setBalances(newBalances);
             
+            // Get latest price data from Pyth
+            try {
+                console.log("Fetching initial SOL/USD price from Pyth...");
+                const solPrice = await getPythPrice('SOL/USD');
+                console.log("Initial SOL/USD price from Pyth:", solPrice);
+                
+                // Update existing vaults with the latest price
+                if (solPrice && vaults.length > 0) {
+                    const updatedVaults = vaults.map(vault => {
+                        // Only update SOL vaults for now
+                        if (vault.collateralType === 'SOL' || !vault.collateralType) {
+                            return {
+                                ...vault,
+                                collateralValueUSD: vault.collateral * solPrice,
+                                collateralPrice: solPrice
+                            };
+                        }
+                        return vault;
+                    });
+                    
+                    console.log("Updating vaults with initial price data:", updatedVaults);
+                    setVaults(updatedVaults);
+                    localStorage.setItem('vaults', JSON.stringify(updatedVaults));
+                }
+                
+                // Also store the price for new vaults
+                setCollateralPrice(solPrice);
+            } catch (priceError) {
+                console.warn("Failed to get initial Pyth price data:", priceError);
+                // Continue even if price fetch fails
+            }
+            
         } catch (err) {
             console.error("Error during initialization:", err);
             setError(err.message);
@@ -165,20 +198,93 @@ const SaiInterface = () => {
     }, [connected, publicKey]);
 
     // Add a function to refresh balances after vault creation
-    const refreshBalances = async () => {
+    const refreshBalances = async (forceRetry = false) => {
         if (!connected || !publicKey) return;
         
         try {
-            setLoading(true);
-            console.log("Refreshing balances...");
-            const newBalances = await getTokenBalances(publicKey);
-            console.log("New balances:", newBalances);
-            setBalances(newBalances);
+            setRefreshing(true);
+            console.log("Refreshing balances and price data...");
+            
+            // Force a retry loop if needed
+            let retries = forceRetry ? 3 : 1;
+            let newBalances = null;
+            let error = null;
+            
+            // Try multiple times if forceRetry is true
+            for (let i = 0; i < retries; i++) {
+                try {
+                    console.log(`Balance refresh attempt ${i+1}/${retries}`);
+                    
+                    // Optionally try to refresh wallet connection
+                    if (i > 0 && wallet) {
+                        try {
+                            console.log("Attempting to refresh wallet connection...");
+                            await refreshConnection(wallet);
+                        } catch (connErr) {
+                            console.error("Error refreshing wallet connection:", connErr);
+                            // Continue anyway
+                        }
+                    }
+                    
+                    // Get token balances
+                    newBalances = await getTokenBalances(publicKey);
+                    console.log(`Balance refresh attempt ${i+1} result:`, newBalances);
+                    
+                    // Success, exit loop
+                    error = null;
+                    break;
+                } catch (err) {
+                    console.error(`Balance refresh attempt ${i+1} failed:`, err);
+                    error = err;
+                    
+                    // Wait before retry
+                    if (i < retries - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 1000));
+                    }
+                }
+            }
+            
+            if (error) {
+                throw error;
+            }
+            
+            if (newBalances) {
+                console.log("New balances:", newBalances);
+                setBalances(newBalances);
+            }
+            
+            // Get latest price data from Pyth for SOL/USD
+            try {
+                const solPrice = await getPythPrice('SOL/USD');
+                console.log("Latest SOL/USD price from Pyth:", solPrice);
+                
+                // Update collateral prices in any vaults
+                if (solPrice && vaults.length > 0) {
+                    const updatedVaults = vaults.map(vault => {
+                        // Only update SOL vaults for now
+                        if (vault.collateralType === 'SOL' || !vault.collateralType) {
+                            return {
+                                ...vault,
+                                collateralValueUSD: vault.collateral * solPrice,
+                                collateralPrice: solPrice
+                            };
+                        }
+                        return vault;
+                    });
+                    
+                    console.log("Updating vaults with fresh price data:", updatedVaults);
+                    setVaults(updatedVaults);
+                    localStorage.setItem('vaults', JSON.stringify(updatedVaults));
+                }
+            } catch (priceError) {
+                console.warn("Failed to get Pyth price data:", priceError);
+                // Continue even if price data fails - we still have balances
+            }
         } catch (err) {
             console.error("Error refreshing balances:", err);
             setError("Failed to refresh balances: " + err.message);
         } finally {
-            setLoading(false);
+            setRefreshing(false);
         }
     };
 
@@ -400,67 +506,8 @@ const SaiInterface = () => {
         }
     };
 
-    // Add function to close a vault
-    const handleCloseVault = async (vault) => {
-        if (!connected || !publicKey) {
-            setError("Please connect your wallet first");
-            return;
-        }
-        
-        try {
-            setClosingVault(true);
-            setError(null);
-            
-            // Confirm with user
-            const confirmClose = window.confirm(
-                `Are you sure you want to close this vault?\n\n` +
-                `This will:\n` +
-                `- Burn ${vault.minted} SAI tokens\n` +
-                `- Return ${vault.collateral} SOL to your wallet\n\n` +
-                `This action cannot be undone.`
-            );
-            
-            if (!confirmClose) {
-                return;
-            }
-            
-            console.log(`Closing vault ${vault.address} and returning ${vault.collateral} SOL`);
-            const result = await closeVault(vault.address, vault.tokenMint, vault.minted);
-            
-            if (!result || !result.success) {
-                throw new Error(result?.error || "Failed to close vault");
-            }
-            
-            console.log("Vault closed successfully:", result);
-            
-            // Remove vault from state
-            const updatedVaults = vaults.filter(v => v.id !== vault.id);
-            setVaults(updatedVaults);
-            
-            // Save updated list to localStorage
-            saveVaultsToLocalStorage(updatedVaults);
-            
-            // Show success message
-            setTransactionSuccess(true);
-            setTokenInfo({
-                message: result.message
-            });
-            
-            // Refresh balances after a short delay to allow for network propagation
-            setTimeout(() => {
-                refreshBalances();
-            }, 2000);
-            
-        } catch (err) {
-            console.error("Error closing vault:", err);
-            setError("Failed to close vault: " + err.message);
-        } finally {
-            setClosingVault(false);
-        }
-    };
-
-    // Add function to repay SAI
-    const handleRepayVault = async (vault) => {
+    // Handle repay function
+    const handleRepay = async (vault, repayAmount) => {
         if (!connected || !publicKey) {
             setError("Please connect your wallet first");
             return;
@@ -470,9 +517,15 @@ const SaiInterface = () => {
             setLoading(true);
             setError(null);
             
-            const repayAmount = parseFloat(vault.repayAmount);
-            if (isNaN(repayAmount) || repayAmount <= 0) {
-                throw new Error("Please enter a valid amount to repay");
+            if (!repayAmount || isNaN(parseFloat(repayAmount)) || parseFloat(repayAmount) <= 0) {
+                throw new Error("Please enter a valid amount");
+            }
+            
+            repayAmount = parseFloat(repayAmount);
+            
+            if (repayAmount > vault.minted) {
+                repayAmount = vault.minted; // Cap at max outstanding
+                console.log(`Adjusting repay amount to maximum outstanding: ${repayAmount}`);
             }
             
             if (repayAmount > balances.sai) {
@@ -491,14 +544,21 @@ const SaiInterface = () => {
             // Update vault in state
             const updatedVaults = vaults.map(v => {
                 if (v.id === vault.id) {
+                    const newMinted = Math.max(0, parseFloat(v.minted) - repayAmount);
+                    console.log(`Updating vault ${v.id}: old minted=${v.minted}, repaid=${repayAmount}, new minted=${newMinted}`);
                     return {
                         ...v,
-                        minted: Math.max(0, v.minted - repayAmount),
+                        minted: newMinted,
                         repayAmount: ''
                     };
                 }
                 return v;
             });
+            
+            // Log the updated vault for debugging
+            const updatedVault = updatedVaults.find(v => v.id === vault.id);
+            console.log("Updated vault state:", updatedVault);
+            
             setVaults(updatedVaults);
             
             // Save updated list to localStorage
@@ -520,6 +580,271 @@ const SaiInterface = () => {
             setError("Failed to repay SAI: " + err.message);
         } finally {
             setLoading(false);
+        }
+    };
+
+    // Add function to close a vault and retrieve SOL collateral
+    const handleCloseVault = async (vault) => {
+        if (!connected || !publicKey) {
+            setError("Please connect your wallet first");
+            return;
+        }
+        
+        try {
+            setClosingVault(true);
+            setError(null);
+            
+            // Confirm with user
+            const confirmClose = window.confirm(
+                `Are you sure you want to close this vault?\n\n` +
+                `This will return ${vault.collateral} SOL to your wallet.\n\n` +
+                `This action cannot be undone.`
+            );
+            
+            if (!confirmClose) {
+                setClosingVault(false);
+                return;
+            }
+            
+            console.log(`Closing vault ${vault.address} and returning ${vault.collateral} SOL`);
+            console.log(`Vault details:`, vault);
+            
+            // Ensure API is initialized
+            if (!isAPIInitialized()) {
+                console.log("API not initialized, initializing now");
+                await initializeAPI(wallet);
+            }
+            
+            // Call closeVault with explicit parameters
+            const result = await closeVault(
+                vault.address,  // vault address
+                vault.tokenMint, // token mint
+                0  // amount to burn (0 since we've already repaid)
+            );
+            
+            if (!result || !result.success) {
+                throw new Error(result?.error || "Failed to close vault");
+            }
+            
+            console.log("Vault closed successfully:", result);
+            
+            // Remove vault from state
+            const updatedVaults = vaults.filter(v => v.id !== vault.id);
+            setVaults(updatedVaults);
+            
+            // Save updated list to localStorage
+            saveVaultsToLocalStorage(updatedVaults);
+            
+            // Show success message
+            setTransactionSuccess(true);
+            setTokenInfo({
+                message: result.message || "Successfully closed vault and returned SOL to your wallet"
+            });
+            
+            // Force refresh balances immediately and again after a short delay
+            refreshBalances();
+            setTimeout(() => {
+                refreshBalances();
+            }, 2000);
+            
+        } catch (err) {
+            console.error("Error closing vault:", err);
+            setError("Failed to close vault: " + err.message);
+            
+            // Try to show more debugging info
+            if (err.message?.includes("signature")) {
+                console.log("This appears to be a transaction signature error. Please check your wallet is connected.");
+                setError("Transaction signature failed. Please ensure your wallet is connected and try again.");
+            }
+        } finally {
+            setClosingVault(false);
+        }
+    };
+
+    // Add function for emergency SOL recovery
+    const handleEmergencySolRecovery = async (vault) => {
+        if (!connected || !publicKey) {
+            setError("Please connect your wallet first");
+            return;
+        }
+        
+        try {
+            setClosingVault(true);
+            setError(null);
+            
+            // Show emergency warning to user
+            const confirmRecovery = window.confirm(
+                `EMERGENCY SOL RECOVERY MODE\n\n` +
+                `This will attempt to recover your SOL from vault: ${vault.address}\n\n` +
+                `Current vault balance: ${vault.collateral} SOL\n\n` +
+                `USE THIS ONLY IF NORMAL VAULT CLOSURE FAILS.\n\n` +
+                `Do you want to continue?`
+            );
+            
+            if (!confirmRecovery) {
+                setClosingVault(false);
+                return;
+            }
+            
+            console.log(`EMERGENCY: Recovering SOL from vault ${vault.address}`);
+            
+            // Ensure API is initialized
+            if (!isAPIInitialized()) {
+                console.log("API not initialized, initializing now");
+                await initializeAPI(wallet);
+            }
+            
+            // Get the API instance
+            const api = new SolanaAPI();
+            api.wallet = wallet;
+            await api.initialize();
+            
+            // Call emergency recovery function
+            const result = await api.emergencyRecoverSol(vault.address);
+            
+            if (!result || !result.success) {
+                throw new Error(result?.error || "Failed to recover SOL");
+            }
+            
+            console.log("Emergency SOL recovery successful:", result);
+            
+            // Remove vault from state to prevent further issues
+            const updatedVaults = vaults.filter(v => v.id !== vault.id);
+            setVaults(updatedVaults);
+            
+            // Save updated list to localStorage
+            saveVaultsToLocalStorage(updatedVaults);
+            
+            // Show success message
+            setTransactionSuccess(true);
+            setTokenInfo({
+                message: result.message || "Successfully recovered SOL from your vault"
+            });
+            
+            // Force refresh balances immediately and again after a short delay
+            // Use the improved refresh function with retry
+            await refreshBalances(true);
+            setTimeout(() => {
+                refreshBalances(true);
+            }, 3000);
+            
+        } catch (err) {
+            console.error("Error in emergency SOL recovery:", err);
+            setError("Emergency recovery failed: " + err.message);
+        } finally {
+            setClosingVault(false);
+        }
+    };
+
+    // Add a function to force reconnect wallet and recover SOL
+    const handleForceReconnectAndRecover = async (vault) => {
+        if (!wallet) {
+            setError("No wallet to reconnect");
+            return;
+        }
+        
+        try {
+            setClosingVault(true);
+            setError(null);
+            
+            const confirmAction = window.confirm(
+                `This will disconnect your wallet, reconnect it, and then try to recover your SOL from vault ${vault.address}.\n\n` +
+                `You may need to approve the reconnection in your wallet.\n\n` +
+                `Do you want to continue?`
+            );
+            
+            if (!confirmAction) {
+                setClosingVault(false);
+                return;
+            }
+            
+            // Attempt to disconnect and reconnect wallet
+            console.log("Attempting to disconnect wallet...");
+            setError("Disconnecting wallet... Please wait.");
+            
+            try {
+                // Try different methods of disconnecting
+                if (typeof wallet.disconnect === 'function') {
+                    await wallet.disconnect();
+                    console.log("Wallet disconnected via disconnect()");
+                } else if (window.solflare) {
+                    await window.solflare.disconnect();
+                    console.log("Solflare wallet disconnected");
+                } else if (window.solana) {
+                    await window.solana.disconnect();
+                    console.log("Phantom wallet disconnected");
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                console.log("Waiting after disconnect...");
+                
+                setError("Reconnecting wallet... Please approve the connection in your wallet.");
+                
+                // Try to reconnect
+                if (typeof wallet.connect === 'function') {
+                    await wallet.connect();
+                    console.log("Wallet reconnected via connect()");
+                } else if (window.solflare) {
+                    await window.solflare.connect();
+                    console.log("Reconnected to Solflare");
+                } else if (window.solana) {
+                    await window.solana.connect();
+                    console.log("Reconnected to Phantom");
+                }
+                
+                console.log("Wallet reconnected successfully");
+                setError("Wallet reconnected. Attempting SOL recovery...");
+                
+                // Wait a bit for connection to stabilize
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+            } catch (reconnectErr) {
+                console.error("Error during wallet reconnection:", reconnectErr);
+                setError("Wallet reconnection failed. Please try connecting manually and then try again.");
+                setClosingVault(false);
+                return;
+            }
+            
+            // Now try to recover SOL
+            console.log("Attempting emergency SOL recovery after reconnection...");
+            
+            // Initialize API with the reconnected wallet
+            await initializeAPI(wallet);
+            
+            // Create API instance
+            const api = new SolanaAPI();
+            api.wallet = wallet;
+            await api.initialize();
+            
+            // Call emergency recovery
+            const result = await api.emergencyRecoverSol(vault.address);
+            
+            if (!result || !result.success) {
+                throw new Error(result?.error || "Failed to recover SOL after reconnection");
+            }
+            
+            console.log("SOL recovery after reconnection successful:", result);
+            
+            // Remove vault from state
+            const updatedVaults = vaults.filter(v => v.id !== vault.id);
+            setVaults(updatedVaults);
+            saveVaultsToLocalStorage(updatedVaults);
+            
+            // Show success
+            setTransactionSuccess(true);
+            setTokenInfo({
+                message: `Successfully recovered SOL after wallet reconnection: ${result.message}`
+            });
+            
+            // Force balance refresh
+            await refreshBalances(true);
+            setTimeout(() => refreshBalances(true), 3000);
+            
+        } catch (err) {
+            console.error("Error in force reconnect and recover:", err);
+            setError("Force reconnect and recovery failed: " + err.message);
+        } finally {
+            setClosingVault(false);
         }
     };
 
@@ -681,6 +1006,28 @@ const SaiInterface = () => {
                         >
                             {refreshing ? 'Refreshing...' : 'Refresh Balances'}
                         </button>
+                        
+                        {/* Debug button */}
+                        <button 
+                            onClick={() => {
+                                console.log("Current vaults:", vaults);
+                                vaults.forEach(v => {
+                                    console.log(`Vault ${v.id} - address: ${v.address}, minted: ${v.minted} (type: ${typeof v.minted})`);
+                                });
+                                alert('Vault debug info printed to console');
+                            }}
+                            style={{
+                                backgroundColor: '#999',
+                                color: 'white',
+                                padding: '5px 10px',
+                                border: 'none',
+                                borderRadius: '4px',
+                                marginLeft: '10px',
+                                fontSize: '12px'
+                            }}
+                        >
+                            Debug Vaults
+                        </button>
                     </div>
 
                     <div className="create-vault-form">
@@ -829,19 +1176,71 @@ const SaiInterface = () => {
                                                     step="0.1"
                                                 />
                                                 <button 
-                                                    onClick={() => handleRepayVault(vault)}
+                                                    onClick={() => handleRepay(vault, vault.repayAmount)}
                                                     disabled={!vault.repayAmount || vault.repayAmount <= 0}
                                                     className="repay-button"
                                                 >
                                                     Repay SAI
                                                 </button>
                                             </div>
+                                            {parseFloat(vault.minted) < 0.001 && (
+                                                <button 
+                                                    onClick={() => handleCloseVault(vault)}
+                                                    disabled={closingVault}
+                                                    className="close-vault-button"
+                                                    style={{
+                                                        backgroundColor: '#4CAF50',
+                                                        color: 'white',
+                                                        padding: '10px 15px',
+                                                        border: 'none',
+                                                        borderRadius: '4px',
+                                                        cursor: 'pointer',
+                                                        fontWeight: 'bold',
+                                                        marginTop: '10px',
+                                                        width: '100%'
+                                                    }}
+                                                >
+                                                    {closingVault ? 'Closing...' : 'Close Vault & Get SOL Back'}
+                                                </button>
+                                            )}
+                                            {/* Always show an emergency recovery button */}
                                             <button 
-                                                onClick={() => handleCloseVault(vault)}
-                                                disabled={closingVault || vault.minted > 0}
-                                                className="close-vault-button"
+                                                onClick={() => handleEmergencySolRecovery(vault)}
+                                                disabled={closingVault}
+                                                className="force-recovery-button"
+                                                style={{
+                                                    backgroundColor: '#d9534f',
+                                                    color: 'white',
+                                                    padding: '10px 15px',
+                                                    border: 'none',
+                                                    borderRadius: '4px',
+                                                    cursor: 'pointer',
+                                                    fontWeight: 'bold',
+                                                    marginTop: '10px',
+                                                    width: '100%'
+                                                }}
                                             >
-                                                {closingVault ? 'Closing...' : 'Close Vault'}
+                                                {closingVault ? 'Recovering...' : 'Force SOL Recovery'}
+                                            </button>
+                                            
+                                            {/* Nuclear option - reconnect wallet and recover */}
+                                            <button 
+                                                onClick={() => handleForceReconnectAndRecover(vault)}
+                                                disabled={closingVault}
+                                                className="nuclear-option-button"
+                                                style={{
+                                                    backgroundColor: '#9400D3',
+                                                    color: 'white',
+                                                    padding: '10px 15px',
+                                                    border: 'none',
+                                                    borderRadius: '4px',
+                                                    cursor: 'pointer',
+                                                    fontWeight: 'bold',
+                                                    marginTop: '10px',
+                                                    width: '100%'
+                                                }}
+                                            >
+                                                {closingVault ? 'Working...' : '🔄 Nuclear Option: Reconnect & Recover'}
                                             </button>
                                         </div>
                                     </div>
