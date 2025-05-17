@@ -181,6 +181,92 @@ async function setupTokenMetadata(connection, tokenMint, name = "SAI", symbol = 
     }
 }
 
+// Add this helper function near the top where other utility functions are defined
+async function confirmTransactionWithRetry(connection, signature, maxRetries = 3, timeoutSeconds = 60) {
+    console.log(`Confirming transaction ${signature} with ${maxRetries} retries and ${timeoutSeconds}s timeout`);
+    
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+        try {
+            // Use longer timeout for transaction confirmation
+            const confirmationStrategy = {
+                signature,
+                timeout: timeoutSeconds * 1000, // Convert to milliseconds
+            };
+            
+            console.log(`Confirmation attempt ${attempt + 1}/${maxRetries}...`);
+            await connection.confirmTransaction(confirmationStrategy, 'confirmed');
+            console.log(`Transaction confirmed on attempt ${attempt + 1}!`);
+            return true;
+        } catch (error) {
+            console.warn(`Confirmation attempt ${attempt + 1} failed:`, error.message);
+            
+            // Check if the transaction was actually successful despite the timeout
+            try {
+                const tx = await connection.getTransaction(signature, {commitment: 'confirmed'});
+                if (tx && tx.meta && !tx.meta.err) {
+                    console.log('Transaction was actually successful despite confirmation timeout!');
+                    return true;
+                }
+            } catch (checkError) {
+                console.error('Error checking transaction status:', checkError.message);
+            }
+            
+            // If this is not the last attempt, wait before trying again
+            if (attempt < maxRetries - 1) {
+                const delay = 2000 * (attempt + 1); // Exponential backoff
+                console.log(`Waiting ${delay/1000}s before next attempt...`);
+                await new Promise(resolve => setTimeout(resolve, delay));
+            }
+        }
+    }
+    
+    // After all retries, check one more time if the transaction was successful
+    try {
+        const tx = await connection.getTransaction(signature, {commitment: 'confirmed'});
+        if (tx && tx.meta && !tx.meta.err) {
+            console.log('Final check: Transaction was actually successful!');
+            return true;
+        }
+    } catch (error) {
+        console.error('Error in final transaction check:', error.message);
+    }
+    
+    throw new Error(`Transaction confirmation failed after ${maxRetries} attempts`);
+}
+
+// Add at the top with other utility functions
+async function debugVaultData(connection, vaultAddress) {
+    try {
+        // Parse the address
+        const vaultPubkey = new PublicKey(vaultAddress);
+        
+        // Get account info
+        console.log(`[DIAGNOSTIC] Getting account info for vault: ${vaultAddress}`);
+        const accountInfo = await connection.getAccountInfo(vaultPubkey);
+        
+        if (!accountInfo) {
+            console.log(`[DIAGNOSTIC] No account found at address ${vaultAddress}`);
+            return { exists: false };
+        }
+        
+        console.log(`[DIAGNOSTIC] Account exists with ${accountInfo.lamports / LAMPORTS_PER_SOL} SOL`);
+        console.log(`[DIAGNOSTIC] Owner: ${accountInfo.owner.toString()}`);
+        console.log(`[DIAGNOSTIC] Executable: ${accountInfo.executable}`);
+        console.log(`[DIAGNOSTIC] Data length: ${accountInfo.data.length} bytes`);
+        
+        return {
+            exists: true,
+            balance: accountInfo.lamports / LAMPORTS_PER_SOL,
+            owner: accountInfo.owner.toString(),
+            executable: accountInfo.executable,
+            dataLength: accountInfo.data.length
+        };
+    } catch (err) {
+        console.error(`[DIAGNOSTIC] Error checking vault ${vaultAddress}:`, err);
+        return { exists: false, error: err.message };
+    }
+}
+
 export class SolanaAPI {
     constructor() {
         this.initialized = false;
@@ -258,10 +344,44 @@ export class SolanaAPI {
                 console.log("Public key available but cannot be converted to string");
             }
             
-            // Ensure we have a connection
+            // Ensure we have a connection - try multiple endpoints
             if (!this.connection) {
                 console.log("Creating new connection...");
-                this.connection = new Connection(clusterApiUrl('devnet'), 'confirmed');
+                
+                // Try multiple endpoints with fallbacks
+                const endpoints = [
+                    'https://api.devnet.solana.com',
+                    'https://solana-devnet-rpc.publicnode.com',
+                    'https://devnet.genesysgo.net',
+                    'https://api.testnet.solana.com'
+                ];
+                
+                let connected = false;
+                let lastError = null;
+                
+                for (const endpoint of endpoints) {
+                    if (connected) break;
+                    
+                    try {
+                        console.log(`Trying to connect to ${endpoint}...`);
+                        const tempConnection = new Connection(endpoint, 'confirmed');
+                        
+                        // Test connection
+                        const version = await tempConnection.getVersion();
+                        console.log(`Connected to ${endpoint}. Version:`, version);
+                        
+                        this.connection = tempConnection;
+                        connected = true;
+                    } catch (e) {
+                        lastError = e;
+                        console.error(`Failed to connect to ${endpoint}:`, e);
+                    }
+                }
+                
+                if (!connected) {
+                    console.error("Failed to connect to any Solana endpoint:", lastError);
+                    return false;
+                }
             }
 
             // Test connection
@@ -628,225 +748,51 @@ export class SolanaAPI {
                 throw new Error('API not initialized. Please initialize first.');
             }
             
-            // Ensure wallet is connected and available
+            // Ensure wallet is connected
             if (!this.wallet || !this.wallet.publicKey) {
-                console.warn('No wallet available, trying to reconnect...');
-                // Try to auto-reconnect
-                if (window.solflare && !window.solflare.isConnected) {
-                    try {
-                        await window.solflare.connect();
-                        console.log("Reconnected to Solflare wallet");
-                    } catch (e) {
-                        console.error("Failed to reconnect Solflare wallet:", e);
-                    }
-                } else if (window.solana && !window.solana.isConnected) {
-                    try {
-                        await window.solana.connect();
-                        console.log("Reconnected to Phantom wallet");
-                    } catch (e) {
-                        console.error("Failed to reconnect Phantom wallet:", e);
-                    }
-                }
-                
-                // Check again after reconnection attempts
-                if (!this.wallet || !this.wallet.publicKey) {
-                    throw new Error('No wallet available. Please connect your wallet and try again.');
-                }
+                throw new Error('No wallet available. Please connect your wallet and try again.');
             }
             
-            // Double-check signing capability
-            const canSignWithSolflare = window.solflare && window.solflare.isConnected;
-            const canSignWithPhantom = window.solana && window.solana.isConnected;
-            const canSignWithAdapter = this.wallet && typeof this.wallet.signTransaction === 'function';
-            
-            if (!canSignWithSolflare && !canSignWithPhantom && !canSignWithAdapter) {
-                throw new Error('No signing method available. Please reconnect your wallet and try again.');
-            }
-            
-            console.log("Wallet signing capabilities:", {
-                solflare: canSignWithSolflare,
-                phantom: canSignWithPhantom,
-                adapter: canSignWithAdapter,
-                publicKey: this.wallet.publicKey.toString()
-            });
+            console.log("Wallet public key:", this.wallet.publicKey.toString());
             
             // Convert to raw values
-            const lamports = collateralAmount * LAMPORTS_PER_SOL;
-            const saiRaw = new BN(saiAmount * Math.pow(10, SAI_DECIMALS));
+            const lamports = Math.floor(collateralAmount * LAMPORTS_PER_SOL);
+            const saiRaw = new BN(Math.floor(saiAmount * Math.pow(10, SAI_DECIMALS)));
             
-            console.log(`Using ${lamports} lamports and ${saiRaw} raw SAI units`);
+            console.log(`Using ${lamports} lamports (${collateralAmount} SOL) and ${saiRaw} raw SAI units (${saiAmount} SAI)`);
             
-            // Ensure connection is active
+            // Create a deterministic vault keypair
+            const timestamp = Date.now().toString();
+            const seedPhrase = `vault-${this.wallet.publicKey.toString()}-${timestamp}`;
+            console.log(`Creating vault keypair with seed: ${seedPhrase}`);
+            
+            const seed = new TextEncoder().encode(seedPhrase);
+            const hash = await crypto.subtle.digest('SHA-256', seed);
+            const seedBytes = new Uint8Array(hash);
+            const vaultKeypair = Keypair.fromSeed(seedBytes.slice(0, 32));
+            
+            console.log("Created vault account:", vaultKeypair.publicKey.toString());
+            
+            // Get a valid token mint
+            const tokenMint = this.saiMint;
+            console.log("Using token mint:", tokenMint.toString());
+            
+            // Get the user's token account
+            const userTokenAccount = await getAssociatedTokenAddress(
+                tokenMint,
+                this.wallet.publicKey
+            );
+            
+            console.log("User token account:", userTokenAccount.toString());
+            
+            // Check if the token account exists
             try {
-                const version = await this.connection.getVersion();
-                console.log("Connection is active. Solana version:", version);
-            } catch (connErr) {
-                console.error("Connection error:", connErr);
-                throw new Error("Failed to connect to Solana network. Please try again.");
-            }
-            
-            // Generate a keypair for the CDP
-            const vaultKeypair = Keypair.generate();
-            console.log("Created demo vault account:", vaultKeypair.publicKey.toString());
-            
-            try {
-                // Check if we already have a saved SAI token mint
-                let tokenMint;
-                let tokenMintKeypair;
-                let createMintTx;
-                let needsToCreateMint = false;
-                
-                // Try to retrieve existing token mint from localStorage
-                const existingSaiMint = localStorage.getItem('sai_token_mint');
-                
-                if (existingSaiMint) {
-                    try {
-                        // Use existing token mint
-                        console.log("Using existing SAI token mint:", existingSaiMint);
-                        tokenMint = new PublicKey(existingSaiMint);
-                        this.saiMint = tokenMint;
-                        
-                        // Verify the mint exists on-chain
-                        const mintInfo = await this.connection.getAccountInfo(tokenMint);
-                        if (!mintInfo) {
-                            console.warn("Saved token mint not found on chain, will create a new one");
-                            needsToCreateMint = true;
-                        } else {
-                            console.log("Verified existing token mint is valid");
-                        }
-                    } catch (err) {
-                        console.error("Error using saved token mint:", err);
-                        needsToCreateMint = true;
-                    }
-                } else {
-                    console.log("No existing SAI token mint found, will create a new one");
-                    needsToCreateMint = true;
-                }
-                
-                // Create a new token mint if needed
-                if (needsToCreateMint) {
-                    console.log("Creating new SAI token mint");
-                    tokenMintKeypair = Keypair.generate();
-                    tokenMint = tokenMintKeypair.publicKey;
-                    this.saiMint = tokenMint;
+                const accountInfo = await this.connection.getAccountInfo(userTokenAccount);
+                if (!accountInfo) {
+                    console.log("Token account doesn't exist, creating it");
                     
-                    // Save the token mint to localStorage for future use
-                    localStorage.setItem('sai_token_mint', tokenMint.toString());
-                    
-                    // Add to user tokens list for tracking
-                    try {
-                        const userTokens = JSON.parse(localStorage.getItem('user_tokens') || '[]');
-                        if (!userTokens.includes(tokenMint.toString())) {
-                            userTokens.push(tokenMint.toString());
-                            localStorage.setItem('user_tokens', JSON.stringify(userTokens));
-                        }
-                    } catch (err) {
-                        console.error("Error updating user tokens:", err);
-                    }
-                    
-                    // TRANSACTION 1: Create the token mint
-                    createMintTx = new Transaction();
-                    createMintTx.add(
-                        ComputeBudgetProgram.setComputeUnitLimit({
-                            units: 400000
-                        })
-                    );
-                    
-                    // Calculate rent for mint account
-                    const mintRent = await this.connection.getMinimumBalanceForRentExemption(82);
-                    
-                    // Add instruction to create account for the mint
-                    createMintTx.add(
-                        SystemProgram.createAccount({
-                            fromPubkey: this.wallet.publicKey,
-                            newAccountPubkey: tokenMint,
-                            lamports: mintRent,
-                            space: 82,
-                            programId: TOKEN_PROGRAM_ID
-                        }),
-                        createInitializeMintInstruction(
-                            tokenMint,
-                            SAI_DECIMALS,
-                            this.wallet.publicKey,
-                            null
-                        )
-                    );
-                    
-                    // Get recent blockhash
-                    const { blockhash: mintBlockhash } = await this.connection.getLatestBlockhash('confirmed');
-                    createMintTx.recentBlockhash = mintBlockhash;
-                    createMintTx.feePayer = this.wallet.publicKey;
-                    
-                    // Sign with token mint keypair first
-                    createMintTx.partialSign(tokenMintKeypair);
-                    
-                    console.log("Transaction 1 prepared, signing with wallet");
-                    
-                    // Sign with wallet using our enhanced signing method
-                    let signedMintTx;
-                    try {
-                        signedMintTx = await this.signTransaction(createMintTx);
-                        console.log("Transaction 1 signed successfully");
-                    } catch (signError) {
-                        console.error("Error signing mint transaction:", signError);
-                        throw new Error(`Failed to sign mint transaction: ${signError.message}`);
-                    }
-                    
-                    // Send the transaction
-                    console.log("Sending mint creation transaction...");
-                    const mintSignature = await this.connection.sendRawTransaction(
-                        signedMintTx.serialize(),
-                        { skipPreflight: true }
-                    );
-                    
-                    // Confirm the transaction
-                    console.log("Mint transaction sent:", mintSignature);
-                    try {
-                        await this.connection.confirmTransaction(mintSignature, 'confirmed');
-                        console.log("Mint transaction confirmed!");
-                        
-                        // Set up token metadata for better wallet visibility
-                        await setupTokenMetadata(
-                            this.connection,
-                            tokenMint,
-                            "SAI Stablecoin",
-                            "SAI",
-                            this.wallet.publicKey
-                        );
-                    } catch (err) {
-                        console.error("Error confirming mint transaction:", err);
-                        throw new Error(`Failed to create token mint: ${err.message}`);
-                    }
-                }
-                
-                // Check if we need to create a token account for the user
-                console.log("Checking if user has a token account for SAI...");
-                
-                const userTokenAccount = await getAssociatedTokenAddress(
-                    tokenMint,
-                    this.wallet.publicKey
-                );
-                
-                // Check if the token account exists
-                let tokenAccountInfo;
-                try {
-                    tokenAccountInfo = await this.connection.getAccountInfo(userTokenAccount);
-                } catch (err) {
-                    console.error("Error checking token account:", err);
-                }
-                
-                // Create token account first if needed
-                if (!tokenAccountInfo) {
-                    console.log("Token account doesn't exist. Creating it first.");
-                    
-                    // Create a simple transaction with just token account creation
+                    // Create a transaction for the token account
                     const createAccountTx = new Transaction();
-                    createAccountTx.add(
-                        ComputeBudgetProgram.setComputeUnitLimit({
-                            units: 200000
-                        })
-                    );
-                    
                     createAccountTx.add(
                         createAssociatedTokenAccountInstruction(
                             this.wallet.publicKey,
@@ -856,121 +802,202 @@ export class SolanaAPI {
                         )
                     );
                     
-                    // Get blockhash
-                    const { blockhash: accountBlockhash } = await this.connection.getLatestBlockhash('confirmed');
-                    createAccountTx.recentBlockhash = accountBlockhash;
+                    // Get fresh blockhash
+                    const { blockhash } = await this.connection.getLatestBlockhash();
+                    createAccountTx.recentBlockhash = blockhash;
                     createAccountTx.feePayer = this.wallet.publicKey;
                     
-                    // Sign and send the token account creation transaction
-                    try {
-                        const signedAccountTx = await this.signTransaction(createAccountTx);
-                        
-                        const accountSignature = await this.connection.sendRawTransaction(
-                            signedAccountTx.serialize(),
-                            { skipPreflight: true }
-                        );
-                        
-                        console.log("Token account creation transaction sent:", accountSignature);
-                        await this.connection.confirmTransaction(accountSignature, 'confirmed');
-                        console.log("Token account created successfully");
-                    } catch (err) {
-                        console.error("Error creating token account:", err);
-                        throw new Error(`Failed to create token account: ${err.message}`);
-                    }
-                }
-                
-                // Now create a simple mint transaction with reduced instructions
-                console.log("Creating transaction to mint", saiAmount, "SAI tokens to user");
-                
-                // Use a fresh connection
-                await this.ensureConnection();
-                
-                // Get a fresh blockhash
-                const { blockhash: mintBlockhash } = await this.connection.getLatestBlockhash('confirmed');
-                
-                // Create a simple mint transaction
-                const mintTx = new Transaction();
-                mintTx.recentBlockhash = mintBlockhash;
-                mintTx.feePayer = this.wallet.publicKey;
-                
-                // Include the compute budget instruction
-                mintTx.add(
-                    ComputeBudgetProgram.setComputeUnitLimit({
-                        units: 200000
-                    })
-                );
-                
-                // Add mint instruction only
-                mintTx.add(
-                    createMintToInstruction(
-                        tokenMint,
-                        userTokenAccount,
-                        this.wallet.publicKey,
-                        saiRaw,
-                        []
-                    )
-                );
-                
-                // Sign and send transaction
-                try {
-                    console.log("Signing mint transaction with wallet");
-                    const signedMintTx = await this.signTransaction(mintTx);
-                    console.log("Mint transaction signed successfully");
-                    
-                    console.log("Sending mint transaction");
-                    const mintSignature = await this.connection.sendRawTransaction(
-                        signedMintTx.serialize(),
+                    // Sign and send
+                    const signedTx = await this.signTransaction(createAccountTx);
+                    const txId = await this.connection.sendRawTransaction(
+                        signedTx.serialize(), 
                         { skipPreflight: true }
                     );
                     
-                    console.log("Mint transaction sent:", mintSignature);
-                    await this.connection.confirmTransaction(mintSignature, 'confirmed');
-                    console.log("Mint transaction confirmed successfully");
-                } catch (err) {
-                    console.error("Error with mint transaction:", err);
-                    throw new Error(`Failed to mint SAI tokens: ${err.message}`);
+                    console.log("Token account creation transaction sent:", txId);
+                    await this.connection.confirmTransaction(txId);
+                    console.log("Token account created successfully");
+                } else {
+                    console.log("Token account already exists");
                 }
-                
-                // Save the mint address to localStorage
-                localStorage.setItem('sai_token_mint', tokenMint.toString());
-                
-                // Save the vault to local storage along with its token mint
-                try {
-                    const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
-                    vaults.push({
-                        vaultAddress: vaultKeypair.publicKey.toString(),
-                        tokenMint: tokenMint.toString(),
-                        collateral: collateralAmount,
-                        debt: saiAmount,
-                        created: new Date().toISOString()
-                    });
-                    localStorage.setItem('vaults', JSON.stringify(vaults));
-                    console.log('Saved vault to localStorage:', vaultKeypair.publicKey.toString());
-                } catch (error) {
-                    console.error('Error saving vault to localStorage:', error);
-                }
-                
-                // Update cached balances
-                await this.refreshBalances();
-                
-                console.log("Vault created successfully!");
-                return {
-                    success: true,
-                    vaultAddress: vaultKeypair.publicKey.toString(),
-                    tokenMint: tokenMint.toString()
-                };
             } catch (error) {
-                console.error("Error creating CDP:", error);
-                return {
-                    success: false,
-                    error: error.message || 'Failed to create CDP'
-                };
+                console.error("Error checking token account:", error);
             }
+            
+            // 1. First transfer SOL to the vault
+            console.log(`Creating SOL transfer transaction for ${lamports} lamports (${collateralAmount} SOL)`);
+            
+            // Get user's current balance before transfer
+            const userBalanceBefore = await this.connection.getBalance(this.wallet.publicKey);
+            console.log(`User balance before transfer: ${userBalanceBefore / LAMPORTS_PER_SOL} SOL`);
+            
+            const transferTx = new Transaction();
+            
+            // Add compute budget instruction to increase unit limit
+            transferTx.add(
+                ComputeBudgetProgram.setComputeUnitLimit({
+                    units: 200000
+                })
+            );
+            
+            transferTx.add(
+                SystemProgram.transfer({
+                    fromPubkey: this.wallet.publicKey,
+                    toPubkey: vaultKeypair.publicKey,
+                    lamports
+                })
+            );
+            
+            // Get fresh blockhash
+            const { blockhash: transferBlockhash } = await this.connection.getLatestBlockhash('processed');
+            transferTx.recentBlockhash = transferBlockhash;
+            transferTx.feePayer = this.wallet.publicKey;
+            
+            // Sign and send
+            console.log("Signing SOL transfer transaction");
+            const signedTransferTx = await this.signTransaction(transferTx);
+            
+            console.log("Sending SOL transfer transaction");
+            const transferTxId = await this.connection.sendRawTransaction(
+                signedTransferTx.serialize(),
+                { 
+                    skipPreflight: false,
+                    preflightCommitment: 'processed',
+                    maxRetries: 3
+                }
+            );
+            
+            console.log("SOL transfer transaction sent:", transferTxId);
+            
+            // Wait more carefully for confirmation
+            console.log("Waiting for SOL transfer confirmation...");
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds for transaction to propagate
+            
+            const confirmationResult = await this.connection.confirmTransaction({
+                signature: transferTxId,
+                lastValidBlockHeight: (await this.connection.getLatestBlockhash()).lastValidBlockHeight,
+                commitment: 'confirmed'
+            });
+            
+            console.log("SOL transfer confirmed:", confirmationResult);
+            
+            // Get user's balance after transfer
+            const userBalanceAfter = await this.connection.getBalance(this.wallet.publicKey);
+            console.log(`User balance after transfer: ${userBalanceAfter / LAMPORTS_PER_SOL} SOL`);
+            const balanceChange = (userBalanceBefore - userBalanceAfter) / LAMPORTS_PER_SOL;
+            console.log(`User balance change: ${balanceChange} SOL`);
+            
+            // Check if the balance change is significantly different from the expected amount
+            // Allowing for transaction fees (which should be much smaller than the transfer amount)
+            if (Math.abs(balanceChange - collateralAmount) > 0.01) {
+                console.warn(`Balance change (${balanceChange} SOL) differs from expected amount (${collateralAmount} SOL)`);
+            }
+            
+            // Verify the transfer succeeded
+            const vaultBalance = await this.connection.getBalance(vaultKeypair.publicKey);
+            console.log(`Vault balance after transfer: ${vaultBalance / LAMPORTS_PER_SOL} SOL`);
+            
+            if (vaultBalance < lamports * 0.99) { // Allow for a small margin of error due to fees
+                console.error(`Transfer incomplete. Expected ${lamports / LAMPORTS_PER_SOL} SOL, but vault only has ${vaultBalance / LAMPORTS_PER_SOL} SOL`);
+                throw new Error(`SOL transfer failed. Expected vault to have ${collateralAmount} SOL, but it only has ${vaultBalance / LAMPORTS_PER_SOL} SOL`);
+            }
+            
+            // Wait a bit before next transaction
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            
+            // 2. Now mint SAI tokens in a separate transaction
+            console.log(`Creating SAI mint transaction for ${saiAmount} SAI tokens`);
+            
+            const mintTx = new Transaction();
+            
+            // Add compute budget to ensure enough computational resources
+            mintTx.add(
+                ComputeBudgetProgram.setComputeUnitLimit({
+                    units: 200000
+                })
+            );
+            
+            mintTx.add(
+                createMintToInstruction(
+                    tokenMint,
+                    userTokenAccount,
+                    this.wallet.publicKey,
+                    saiRaw,
+                    []
+                )
+            );
+
+            // Get fresh blockhash
+            const { blockhash: mintBlockhash } = await this.connection.getLatestBlockhash('processed');
+            mintTx.recentBlockhash = mintBlockhash;
+            mintTx.feePayer = this.wallet.publicKey;
+            
+            // Sign and send
+            console.log("Signing SAI mint transaction");
+            const signedMintTx = await this.signTransaction(mintTx);
+            
+            console.log("Sending SAI mint transaction");
+            const mintTxId = await this.connection.sendRawTransaction(
+                signedMintTx.serialize(),
+                { 
+                    skipPreflight: false,
+                    preflightCommitment: 'processed',
+                    maxRetries: 3
+                }
+            );
+            
+            console.log("SAI mint transaction sent:", mintTxId);
+            
+            // Wait more carefully for confirmation
+            console.log("Waiting for SAI mint confirmation...");
+            await new Promise(resolve => setTimeout(resolve, 2000)); // Wait 2 seconds
+            
+            await this.connection.confirmTransaction({
+                signature: mintTxId,
+                lastValidBlockHeight: (await this.connection.getLatestBlockhash()).lastValidBlockHeight,
+                commitment: 'confirmed'
+            });
+            console.log("SAI mint confirmed");
+            
+            // Verify token balance was updated
+            try {
+                const tokenAccount = await getAccount(this.connection, userTokenAccount);
+                const tokenBalance = Number(tokenAccount.amount) / Math.pow(10, SAI_DECIMALS);
+                console.log(`User's SAI balance: ${tokenBalance} SAI`);
+            } catch (err) {
+                console.error("Error checking SAI balance:", err);
+                // Don't throw here, just log the error
+            }
+            
+            // Save the vault to local storage
+            try {
+                const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
+                vaults.push({
+                    vaultAddress: vaultKeypair.publicKey.toString(),
+                    address: vaultKeypair.publicKey.toString(), // For compatibility
+                    tokenMint: tokenMint.toString(),
+                    collateral: collateralAmount,
+                    debt: saiAmount,
+                    minted: saiAmount,
+                    created: new Date().toISOString(),
+                    seedPhrase // Store the seed phrase for recreating the keypair
+                });
+                localStorage.setItem('vaults', JSON.stringify(vaults));
+                console.log('Saved vault to localStorage:', vaultKeypair.publicKey.toString());
+            } catch (error) {
+                console.error('Error saving vault to localStorage:', error);
+            }
+            
+            return {
+                success: true,
+                vaultAddress: vaultKeypair.publicKey.toString(),
+                tokenMint: tokenMint.toString()
+            };
         } catch (error) {
-            console.error("Critical error in createCDP:", error);
+            console.error("Error creating CDP:", error);
             return {
                 success: false,
-                error: error.message || 'An unexpected error occurred'
+                error: error.message || 'Failed to create CDP'
             };
         }
     }
@@ -1330,116 +1357,293 @@ export class SolanaAPI {
             const vaultPubkey = new PublicKey(vaultAddress);
             const tokenMintPubkey = new PublicKey(tokenMint);
             
-            // Get vault balance
+            // DIAGNOSTIC: Check the vault balance first
+            console.log(`[DIAGNOSTIC] Checking vault balance for ${vaultAddress}`);
             const vaultBalance = await this.connection.getBalance(vaultPubkey);
+            console.log(`[DIAGNOSTIC] Vault balance: ${vaultBalance / LAMPORTS_PER_SOL} SOL`);
+            
             if (vaultBalance <= 0) {
                 return {
                     success: false,
-                    error: "Vault has no SOL balance"
+                    error: "Vault has no SOL balance to recover"
                 };
             }
             
-            console.log(`Vault balance: ${vaultBalance / LAMPORTS_PER_SOL} SOL`);
-            
-            // Get user's token account
-            const userTokenAccount = await getAssociatedTokenAddress(
-                tokenMintPubkey,
-                this.wallet.publicKey
-            );
-            
-            // Create transaction
-            const transaction = new Transaction();
-            
-            // Add compute budget for larger transaction
-            transaction.add(
-                ComputeBudgetProgram.setComputeUnitLimit({
-                    units: 400000
-                })
-            );
-            
-            // Burn tokens first (if requested)
-            if (tokenAmount > 0) {
-                const tokenAmountRaw = Math.floor(tokenAmount * Math.pow(10, SAI_DECIMALS));
+            // Look up the vault data in localStorage to find the original vault details
+            let vaultData = null;
+            try {
+                const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
+                vaultData = vaults.find(v => v.vaultAddress === vaultAddress || v.address === vaultAddress);
                 
-                // Check token balance
+                if (vaultData) {
+                    console.log(`[DIAGNOSTIC] Found vault data in localStorage:`, vaultData);
+                } else {
+                    console.log(`[DIAGNOSTIC] No vault data found in localStorage for ${vaultAddress}`);
+                }
+            } catch (err) {
+                console.error("[DIAGNOSTIC] Error reading vault data:", err);
+            }
+            
+            // =================================================
+            // METHOD 1: DIRECT TRANSFER USING SEED PHRASE
+            // =================================================
+            if (vaultData && vaultData.seedPhrase) {
+                console.log(`[METHOD 1] Attempting to use stored seed phrase: ${vaultData.seedPhrase}`);
                 try {
-                    const tokenAccount = await getAccount(this.connection, userTokenAccount);
-                    const currentBalance = Number(tokenAccount.amount);
+                    // Recreate the vault keypair from the seed phrase
+                    const seed = new TextEncoder().encode(vaultData.seedPhrase);
+                    const hash = await crypto.subtle.digest('SHA-256', seed);
+                    const seedBytes = new Uint8Array(hash);
+                    const vaultKeypair = Keypair.fromSeed(seedBytes.slice(0, 32));
                     
-                    if (currentBalance < tokenAmountRaw) {
+                    console.log(`[DIAGNOSTIC] Regenerated keypair address: ${vaultKeypair.publicKey.toString()}`);
+                    console.log(`[DIAGNOSTIC] Expected address: ${vaultAddress}`);
+                    
+                    if (vaultKeypair.publicKey.toString() === vaultAddress) {
+                        console.log(`[METHOD 1] Successfully recreated vault keypair`);
+                        
+                        // Build the transaction
+                        const transaction = new Transaction();
+                        
+                        // Add compute budget
+                        transaction.add(
+                            ComputeBudgetProgram.setComputeUnitLimit({
+                                units: 400000
+                            })
+                        );
+                        
+                        // Get recent blockhash
+                        const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+                        transaction.recentBlockhash = blockhash;
+                        transaction.feePayer = this.wallet.publicKey;
+                        
+                        // Add SOL transfer from vault to user wallet
+                        console.log(`[METHOD 1] Adding instruction to transfer ${vaultBalance - 5000} lamports from vault to user`);
+                        transaction.add(
+                            SystemProgram.transfer({
+                                fromPubkey: vaultKeypair.publicKey,
+                                toPubkey: this.wallet.publicKey,
+                                lamports: vaultBalance - 5000 // Leave 5000 lamports for rent
+                            })
+                        );
+                        
+                        // Sign the transaction with the vault keypair
+                        transaction.partialSign(vaultKeypair);
+                        
+                        // Sign with wallet
+                        console.log(`[METHOD 1] Signing transaction with wallet`);
+                        const signedTransaction = await this.signTransaction(transaction);
+                        
+                        // Send and confirm the transaction
+                        console.log(`[METHOD 1] Sending transaction`);
+                        const signature = await this.connection.sendRawTransaction(
+                            signedTransaction.serialize(),
+                            { skipPreflight: true }
+                        );
+                        
+                        console.log(`[METHOD 1] Transaction sent: ${signature}`);
+                        
+                        // Wait a bit before confirming
+                        await new Promise(resolve => setTimeout(resolve, 2000));
+                        
+                        await confirmTransactionWithRetry(this.connection, signature, 5, 120);
+                        console.log(`[METHOD 1] Transaction confirmed!`);
+                        
+                        // Verify the user received the SOL
+                        const userBalanceAfter = await this.connection.getBalance(this.wallet.publicKey);
+                        console.log(`[METHOD 1] User balance after: ${userBalanceAfter / LAMPORTS_PER_SOL} SOL`);
+                        
+                        // Check vault balance again
+                        const vaultBalanceAfter = await this.connection.getBalance(vaultKeypair.publicKey);
+                        console.log(`[METHOD 1] Vault balance after: ${vaultBalanceAfter / LAMPORTS_PER_SOL} SOL`);
+                        
+                        if (vaultBalanceAfter > 10000) {
+                            console.warn(`[METHOD 1] Vault still has ${vaultBalanceAfter / LAMPORTS_PER_SOL} SOL remaining`);
+                        }
+                        
+                        // Update vaults in localStorage
+                        try {
+                            const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
+                            const updatedVaults = vaults.filter(v => 
+                                v.vaultAddress !== vaultAddress && v.address !== vaultAddress
+                            );
+                            localStorage.setItem('vaults', JSON.stringify(updatedVaults));
+                            console.log(`[METHOD 1] Removed vault from localStorage`);
+                        } catch (err) {
+                            console.error(`[METHOD 1] Error updating localStorage:`, err);
+                        }
+                        
                         return {
-                            success: false,
-                            error: `Insufficient token balance. You have ${currentBalance / Math.pow(10, SAI_DECIMALS)} tokens, but trying to burn ${tokenAmount}`
+                            success: true,
+                            message: `Successfully closed vault and returned ${(vaultBalance - 5000) / LAMPORTS_PER_SOL} SOL to your wallet`,
+                            method: "seed_phrase",
+                            signature
                         };
+                    } else {
+                        console.log(`[METHOD 1] Generated keypair doesn't match expected vault address`);
                     }
-                    
-                    // Add burn instruction
-                    transaction.add(
-                        createBurnInstruction(
-                            userTokenAccount,
-                            tokenMintPubkey,
-                            this.wallet.publicKey,
-                            tokenAmountRaw,
-                            [],
-                            TOKEN_PROGRAM_ID
-                        )
-                    );
-                    
-                    console.log(`Added instruction to burn ${tokenAmount} tokens`);
-                } catch (error) {
-                    console.error("Error checking token balance:", error);
-                    return {
-                        success: false,
-                        error: "Failed to check token balance: " + error.message
-                    };
+                } catch (err) {
+                    console.error(`[METHOD 1] Error:`, err);
                 }
             }
             
-            // Add instruction to close vault and return lamports to user
-            const transferInstruction = SystemProgram.transfer({
-                fromPubkey: vaultPubkey,
-                toPubkey: this.wallet.publicKey,
-                lamports: vaultBalance - 5000 // Leave some for rent
-            });
-            
-            transaction.add(transferInstruction);
-            
-            // Get blockhash for the transaction
-            const { blockhash } = await this.connection.getLatestBlockhash();
-            transaction.recentBlockhash = blockhash;
-            transaction.feePayer = this.wallet.publicKey;
-            
-            // Sign with our enhanced signing method
-            console.log('Signing vault closure transaction...');
-            let signedTransaction;
+            // =================================================
+            // METHOD 2: USE TEMPORARY KEYPAIR AS FEE PAYER
+            // =================================================
+            console.log(`[METHOD 2] Attempting transfer using temporary keypair`);
             try {
-                signedTransaction = await this.signTransaction(transaction);
-                console.log('Transaction signed successfully');
-            } catch (error) {
-                console.error('Error signing transaction:', error);
-                throw new Error(`Failed to sign transaction: ${error.message}`);
+                // Create a temporary keypair for this operation
+                const tempKeypair = Keypair.generate();
+                
+                // Get some SOL for the temp keypair (for devnet only)
+                let airdropSuccess = false;
+                try {
+                    console.log(`[METHOD 2] Requesting airdrop for temp keypair: ${tempKeypair.publicKey.toString()}`);
+                    const airdropSignature = await this.connection.requestAirdrop(
+                        tempKeypair.publicKey, 
+                        0.01 * LAMPORTS_PER_SOL
+                    );
+                    await this.connection.confirmTransaction(airdropSignature, 'confirmed');
+                    console.log(`[METHOD 2] Airdrop successful: ${airdropSignature}`);
+                    airdropSuccess = true;
+                } catch (airdropErr) {
+                    console.error(`[METHOD 2] Airdrop failed:`, airdropErr);
+                }
+                
+                // If airdrop failed, we need to fund the temp account from the user wallet
+                if (!airdropSuccess) {
+                    console.log(`[METHOD 2] Funding temp keypair from user wallet`);
+                    const fundTx = new Transaction();
+                    
+                    // Get a fresh blockhash
+                    const { blockhash: fundBlockhash } = await this.connection.getLatestBlockhash('confirmed');
+                    fundTx.recentBlockhash = fundBlockhash;
+                    fundTx.feePayer = this.wallet.publicKey;
+                    
+                    // Add transfer instruction
+                    fundTx.add(
+                        SystemProgram.transfer({
+                            fromPubkey: this.wallet.publicKey,
+                            toPubkey: tempKeypair.publicKey,
+                            lamports: 0.01 * LAMPORTS_PER_SOL
+                        })
+                    );
+                    
+                    // Sign and send
+                    const signedFundTx = await this.signTransaction(fundTx);
+                    const fundSignature = await this.connection.sendRawTransaction(
+                        signedFundTx.serialize(),
+                        { skipPreflight: true }
+                    );
+                    
+                    console.log(`[METHOD 2] Funding transaction sent: ${fundSignature}`);
+                    await this.connection.confirmTransaction(fundSignature, 'confirmed');
+                    console.log(`[METHOD 2] Temp keypair funded`);
+                }
+                
+                // Now create the vault closure transaction
+                const transaction = new Transaction();
+                
+                // Get a fresh blockhash
+                const { blockhash } = await this.connection.getLatestBlockhash('confirmed');
+                transaction.recentBlockhash = blockhash;
+                transaction.feePayer = tempKeypair.publicKey; // Temp keypair pays the fee
+                
+                // Add compute budget instruction
+                transaction.add(
+                    ComputeBudgetProgram.setComputeUnitLimit({
+                        units: 400000
+                    })
+                );
+                
+                // Add instruction to transfer SOL from vault to user
+                console.log(`[METHOD 2] Adding instruction to transfer ${vaultBalance - 5000} lamports from vault to user`);
+                transaction.add(
+                    SystemProgram.transfer({
+                        fromPubkey: vaultPubkey,
+                        toPubkey: this.wallet.publicKey,
+                        lamports: vaultBalance - 5000 // Leave 5000 lamports for rent
+                    })
+                );
+                
+                // Sign transaction with temp keypair
+                transaction.partialSign(tempKeypair);
+                
+                // Send the transaction
+                console.log(`[METHOD 2] Sending transaction`);
+                const signature = await this.connection.sendRawTransaction(
+                    transaction.serialize(),
+                    { skipPreflight: true }
+                );
+                
+                console.log(`[METHOD 2] Transaction sent: ${signature}`);
+                
+                // Record user's balance before
+                const userBalanceBefore = await this.connection.getBalance(this.wallet.publicKey);
+                console.log(`[METHOD 2] User balance before: ${userBalanceBefore / LAMPORTS_PER_SOL} SOL`);
+                
+                // Wait a bit before confirming
+                await new Promise(resolve => setTimeout(resolve, 2000));
+                
+                await confirmTransactionWithRetry(this.connection, signature, 5, 120);
+                console.log(`[METHOD 2] Transaction confirmed!`);
+                
+                // Verify the user received the SOL
+                const userBalanceAfter = await this.connection.getBalance(this.wallet.publicKey);
+                console.log(`[METHOD 2] User balance after: ${userBalanceAfter / LAMPORTS_PER_SOL} SOL`);
+                const balanceChange = (userBalanceAfter - userBalanceBefore) / LAMPORTS_PER_SOL;
+                console.log(`[METHOD 2] Balance change: ${balanceChange} SOL`);
+                
+                // Check vault balance again
+                const vaultBalanceAfter = await this.connection.getBalance(vaultPubkey);
+                console.log(`[METHOD 2] Vault balance after: ${vaultBalanceAfter / LAMPORTS_PER_SOL} SOL`);
+                
+                if (vaultBalanceAfter > 10000) {
+                    console.warn(`[METHOD 2] Vault still has ${vaultBalanceAfter / LAMPORTS_PER_SOL} SOL remaining`);
+                }
+                
+                // Update vaults in localStorage
+                try {
+                    const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
+                    const updatedVaults = vaults.filter(v => 
+                        v.vaultAddress !== vaultAddress && v.address !== vaultAddress
+                    );
+                    localStorage.setItem('vaults', JSON.stringify(updatedVaults));
+                    console.log(`[METHOD 2] Removed vault from localStorage`);
+                } catch (err) {
+                    console.error(`[METHOD 2] Error updating localStorage:`, err);
+                }
+                
+                return {
+                    success: true,
+                    message: `Successfully closed vault and returned ${(vaultBalance - 5000) / LAMPORTS_PER_SOL} SOL to your wallet`,
+                    method: "temp_keypair",
+                    signature
+                };
+            } catch (err) {
+                console.error(`[METHOD 2] Error:`, err);
             }
             
-            // Send transaction
-            console.log('Sending vault closure transaction...');
-            const txid = await this.connection.sendRawTransaction(
-                signedTransaction.serialize(),
-                { skipPreflight: true }
-            );
-            
-            console.log('Transaction sent:', txid);
-            await this.connection.confirmTransaction(txid, 'confirmed');
-            console.log('Transaction confirmed!');
-            
-            // Update cached balances for the UI to show SOL returned
-            this._cachedBalances = {
-                sol: await this.connection.getBalance(this.wallet.publicKey) / LAMPORTS_PER_SOL,
-                sai: tokenAmount > 0 ? 0 : undefined // Only update SAI if we burned tokens
-            };
+            // =================================================
+            // METHOD 3: ABSOLUTE FALLBACK - DIRECT WALLET RECOVERY
+            // =================================================
+            console.log(`[METHOD 3] Attempting direct wallet recovery`);
+            try {
+                // Tell the user the exact amount to ask for in the direct SOL recovery process
+                return {
+                    success: false, 
+                    tempSolution: true,
+                    error: `Please use the Force SOL Recovery button, as the regular vault closure couldn't access your SOL.`,
+                    vaultBalance: vaultBalance / LAMPORTS_PER_SOL,
+                    message: `Unable to close vault through normal methods. Use Force SOL Recovery.`
+                };
+            } catch (err) {
+                console.error(`[METHOD 3] Error:`, err);
+            }
             
             return {
-                success: true,
-                message: `Successfully closed vault and returned ${(vaultBalance - 5000) / LAMPORTS_PER_SOL} SOL to your wallet`
+                success: false,
+                error: "All vault closure methods failed. Please try the Force SOL Recovery button instead."
             };
         } catch (error) {
             console.error('Error closing vault:', error);
@@ -1541,6 +1745,243 @@ export class SolanaAPI {
             return {
                 success: false,
                 error: `Failed to repay SAI: ${error.message}`
+            };
+        }
+    }
+
+    // Add emergency SOL recovery method as a fallback when normal vault closure fails
+    async emergencyRecoverSol(vaultAddress) {
+        try {
+            console.log(`[EMERGENCY RECOVERY] Starting recovery for vault ${vaultAddress}`);
+            
+            if (!this.isInitialized()) {
+                await this.initialize();
+                if (!this.isInitialized()) {
+                    throw new Error("API not initialized. Please initialize first.");
+                }
+            }
+            
+            // Parse the address
+            const vaultPubkey = new PublicKey(vaultAddress);
+            
+            // Get vault balance
+            const vaultBalance = await this.connection.getBalance(vaultPubkey);
+            console.log(`[EMERGENCY RECOVERY] Vault balance: ${vaultBalance / LAMPORTS_PER_SOL} SOL`);
+            
+            if (vaultBalance <= 0) {
+                return {
+                    success: false,
+                    error: "Vault has no SOL balance to recover"
+                };
+            }
+            
+            // First look for the vault data in localStorage to get the seed phrase
+            let seedPhrase = null;
+            try {
+                const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
+                const vaultData = vaults.find(v => v.vaultAddress === vaultAddress || v.address === vaultAddress);
+                
+                if (vaultData && vaultData.seedPhrase) {
+                    seedPhrase = vaultData.seedPhrase;
+                    console.log(`[EMERGENCY RECOVERY] Found seed phrase for vault: ${seedPhrase}`);
+                }
+            } catch (err) {
+                console.error("[EMERGENCY RECOVERY] Error getting vault data:", err);
+            }
+            
+            // Try the simplest approach first - using a new keypair as fee payer
+            try {
+                console.log("[EMERGENCY RECOVERY] Trying direct SOL recovery");
+                
+                // Create a new keypair to serve as fee payer
+                const recoveryKeypair = Keypair.generate();
+                
+                // Fund the recovery keypair (using airdrop for devnet)
+                const airdropSignature = await this.connection.requestAirdrop(
+                    recoveryKeypair.publicKey,
+                    0.02 * LAMPORTS_PER_SOL
+                );
+                
+                console.log(`[EMERGENCY RECOVERY] Airdrop requested: ${airdropSignature}`);
+                await this.connection.confirmTransaction(airdropSignature, 'confirmed');
+                console.log(`[EMERGENCY RECOVERY] Airdrop confirmed`);
+                
+                // Create the recovery transaction
+                const transaction = new Transaction();
+                transaction.recentBlockhash = (await this.connection.getLatestBlockhash('confirmed')).blockhash;
+                transaction.feePayer = recoveryKeypair.publicKey;
+                
+                // Add compute budget instruction
+                transaction.add(
+                    ComputeBudgetProgram.setComputeUnitLimit({
+                        units: 400000
+                    })
+                );
+                
+                // Best effort to recover most of the SOL (leave some for rent)
+                console.log(`[EMERGENCY RECOVERY] Adding transfer instruction for ${(vaultBalance - 10000) / LAMPORTS_PER_SOL} SOL`);
+                transaction.add(
+                    SystemProgram.transfer({
+                        fromPubkey: vaultPubkey,
+                        toPubkey: this.wallet.publicKey,
+                        lamports: vaultBalance - 10000 // Leave 10000 lamports (0.00001 SOL) for rent
+                    })
+                );
+                
+                // Sign with the recovery keypair
+                transaction.partialSign(recoveryKeypair);
+                
+                // If we have a seed phrase, also try to sign with the recreated vault keypair
+                if (seedPhrase) {
+                    try {
+                        // Recreate the vault keypair from seed phrase
+                        const seed = new TextEncoder().encode(seedPhrase);
+                        const hash = await crypto.subtle.digest('SHA-256', seed);
+                        const seedBytes = new Uint8Array(hash);
+                        const vaultKeypair = Keypair.fromSeed(seedBytes.slice(0, 32));
+                        
+                        console.log(`[EMERGENCY RECOVERY] Recreated vault keypair: ${vaultKeypair.publicKey.toString()}`);
+                        
+                        if (vaultKeypair.publicKey.toString() === vaultAddress) {
+                            // Also sign with the vault keypair
+                            transaction.partialSign(vaultKeypair);
+                            console.log(`[EMERGENCY RECOVERY] Also signed with vault keypair`);
+                        }
+                    } catch (err) {
+                        console.error("[EMERGENCY RECOVERY] Error recreating vault keypair:", err);
+                    }
+                }
+                
+                // Send the transaction
+                console.log(`[EMERGENCY RECOVERY] Sending recovery transaction`);
+                const signature = await this.connection.sendRawTransaction(
+                    transaction.serialize(),
+                    { skipPreflight: true }
+                );
+                
+                console.log(`[EMERGENCY RECOVERY] Transaction sent: ${signature}`);
+                
+                // Wait for confirmation with retry
+                await confirmTransactionWithRetry(this.connection, signature, 3, 60);
+                console.log(`[EMERGENCY RECOVERY] Transaction confirmed successfully`);
+                
+                // Update localStorage to remove the vault
+                try {
+                    const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
+                    const updatedVaults = vaults.filter(v => v.vaultAddress !== vaultAddress && v.address !== vaultAddress);
+                    localStorage.setItem('vaults', JSON.stringify(updatedVaults));
+                    console.log(`[EMERGENCY RECOVERY] Removed vault from localStorage`);
+                } catch (err) {
+                    console.error("[EMERGENCY RECOVERY] Error updating localStorage:", err);
+                }
+                
+                return {
+                    success: true,
+                    message: `Successfully recovered ${(vaultBalance - 10000) / LAMPORTS_PER_SOL} SOL from your vault!`,
+                    signature
+                };
+            } catch (err) {
+                console.error("[EMERGENCY RECOVERY] Direct recovery failed:", err);
+            }
+            
+            // If we get here, the simple approach failed. Try a more complex approach.
+            console.log("[EMERGENCY RECOVERY] Trying alternative approach");
+            try {
+                // Create a transaction that first sends some SOL to the vault, then tries to get it all back
+                const transaction = new Transaction();
+                transaction.recentBlockhash = (await this.connection.getLatestBlockhash('confirmed')).blockhash;
+                transaction.feePayer = this.wallet.publicKey;
+                
+                // Add compute budget
+                transaction.add(
+                    ComputeBudgetProgram.setComputeUnitLimit({
+                        units: 400000
+                    })
+                );
+                
+                // Send a tiny amount to the vault first
+                transaction.add(
+                    SystemProgram.transfer({
+                        fromPubkey: this.wallet.publicKey,
+                        toPubkey: vaultPubkey,
+                        lamports: 100000 // 0.0001 SOL
+                    })
+                );
+                
+                // Then try to extract the SOL back plus the existing balance
+                transaction.add(
+                    SystemProgram.transfer({
+                        fromPubkey: vaultPubkey,
+                        toPubkey: this.wallet.publicKey,
+                        lamports: vaultBalance + 90000 // Get back almost everything
+                    })
+                );
+                
+                // If we have a seed phrase, also try to sign with the recreated vault keypair
+                if (seedPhrase) {
+                    try {
+                        // Recreate the vault keypair from seed phrase
+                        const seed = new TextEncoder().encode(seedPhrase);
+                        const hash = await crypto.subtle.digest('SHA-256', seed);
+                        const seedBytes = new Uint8Array(hash);
+                        const vaultKeypair = Keypair.fromSeed(seedBytes.slice(0, 32));
+                        
+                        console.log(`[EMERGENCY RECOVERY] Recreated vault keypair: ${vaultKeypair.publicKey.toString()}`);
+                        
+                        if (vaultKeypair.publicKey.toString() === vaultAddress) {
+                            // Also sign with the vault keypair
+                            transaction.partialSign(vaultKeypair);
+                            console.log(`[EMERGENCY RECOVERY] Signed with vault keypair`);
+                        }
+                    } catch (err) {
+                        console.error("[EMERGENCY RECOVERY] Error recreating vault keypair:", err);
+                    }
+                }
+                
+                // Sign the transaction with wallet
+                console.log("[EMERGENCY RECOVERY] Signing transaction with wallet");
+                const signedTransaction = await this.signTransaction(transaction);
+                
+                // Send the transaction
+                console.log("[EMERGENCY RECOVERY] Sending alternative recovery transaction");
+                const signature = await this.connection.sendRawTransaction(
+                    signedTransaction.serialize(),
+                    { skipPreflight: true }
+                );
+                
+                console.log(`[EMERGENCY RECOVERY] Alternative transaction sent: ${signature}`);
+                await confirmTransactionWithRetry(this.connection, signature, 3, 60);
+                console.log(`[EMERGENCY RECOVERY] Alternative transaction confirmed`);
+                
+                // Update localStorage to remove the vault
+                try {
+                    const vaults = JSON.parse(localStorage.getItem('vaults') || '[]');
+                    const updatedVaults = vaults.filter(v => v.vaultAddress !== vaultAddress && v.address !== vaultAddress);
+                    localStorage.setItem('vaults', JSON.stringify(updatedVaults));
+                    console.log(`[EMERGENCY RECOVERY] Removed vault from localStorage`);
+                } catch (err) {
+                    console.error("[EMERGENCY RECOVERY] Error updating localStorage:", err);
+                }
+                
+                return {
+                    success: true,
+                    message: `Successfully recovered SOL from your vault using alternative method!`,
+                    signature
+                };
+            } catch (err) {
+                console.error("[EMERGENCY RECOVERY] Alternative approach failed:", err);
+            }
+            
+            // If we get here, all automated approaches failed
+            return {
+                success: false,
+                error: "Automated recovery failed. Please manually send some SOL to this address and try again, or contact support."
+            };
+        } catch (error) {
+            console.error("[EMERGENCY RECOVERY] Critical error:", error);
+            return {
+                success: false,
+                error: `Emergency recovery failed: ${error.message}`
             };
         }
     }
